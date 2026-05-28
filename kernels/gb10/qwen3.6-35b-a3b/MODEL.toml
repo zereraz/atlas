@@ -112,6 +112,10 @@ max_thinking_budget = 512
 # K=3 (2 drafts) at 82.4 tok/s — 43% faster. The MoE verify overhead
 # dominates any acceptance-rate gain at K=3 for this 35B-A3B model.
 default_num_drafts = 1
+# Inter-tool prose budget bumped to 4096 (default 384 truncated long Q&A
+# responses when tools were defined, e.g. "top subreddits today" 2026-05-28).
+# Watchdog still fires past 4k free-text tokens without a tool emit.
+max_inter_tool_prose = 4096
 
 [[model_types]]
 model_type = "qwen3_6_moe"
