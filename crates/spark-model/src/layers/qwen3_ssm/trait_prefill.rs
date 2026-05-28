@@ -69,13 +69,11 @@ impl Qwen3SsmLayer {
             None
         };
 
-        // Diagnostic: sync at entry to catch prior-layer errors
-        if k > 4096 {
-            tracing::info!("SSM prefill ENTRY: k={k} h={h}");
-            ctx.gpu
-                .synchronize(stream)
-                .map_err(|e| anyhow::anyhow!("SSM prefill ENTRY: stream broken (k={k}): {e}"))?;
-        }
+        // Diagnostic stream-sync removed (was: `if k > 4096 { synchronize(stream) }`)
+        // The sync killed async pipelining for every SSM layer on chunks
+        // >4k tokens, serializing 30 layers × N chunks per request.
+        // Stream errors will surface at the natural sync point at the end
+        // of the prefill step instead.
 
         // ATLAS_GDN_DUMP hook #0a: pre-input-norm hidden state for THIS
         // layer (= last layer's output + residual). If this matches HF
@@ -117,11 +115,6 @@ impl Qwen3SsmLayer {
             &super::debug::DUMP_L2,
             stream,
         )?;
-        if k > 4096 {
-            ctx.gpu
-                .synchronize(stream)
-                .map_err(|e| anyhow::anyhow!("SSM prefill: SYNC after rms_norm (k={k}): {e}"))?;
-        }
 
         prof!("rms_norm_residual", t0);
         t0 = if ctx.profile {

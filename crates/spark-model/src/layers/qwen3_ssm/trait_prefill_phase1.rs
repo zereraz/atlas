@@ -49,11 +49,9 @@ impl Qwen3SsmLayer {
         let d_conv = ctx.config.linear_conv_kernel_dim;
         let qkvz_size = ctx.config.ssm_qkvz_size();
 
-        // Diagnostic: always sync at entry to catch prior-layer errors
-        tracing::info!("ssm phase1 ENTRY: k={k} h={h} qkvz={qkvz_size}");
-        ctx.gpu.synchronize(stream).map_err(|e| {
-            anyhow::anyhow!("ssm phase1 ENTRY: stream broken BEFORE we start (M={k}): {e}")
-        })?;
+        // ENTRY diagnostic sync removed: it stalled the GPU pipeline at every
+        // SSM layer entry, killing async kernel pipelining. Errors will surface
+        // at the natural end-of-prefill sync.
 
         // ── 1. RMS norm + residual for N tokens ──
         let normed = ctx.buffers.norm_output();
@@ -69,14 +67,6 @@ impl Qwen3SsmLayer {
             eps,
             stream,
         )?;
-        if k > 4096 {
-            ctx.gpu.synchronize(stream).map_err(|e| {
-                anyhow::anyhow!(
-                    "ssm phase1 L{}: SYNC after rms_norm (M={k}): {e}",
-                    0 /*SSM*/
-                )
-            })?;
-        }
 
         // ── 2+3. QKVZ GEMM (+ deinterleave if needed) ──
         let deinterleaved = ctx.buffers.ssm_deinterleaved();
@@ -160,13 +150,6 @@ impl Qwen3SsmLayer {
                 stream,
             )?;
         }
-        // Diagnostic sync: isolate QKVZ GEMM crash from later kernels.
-        // Only for long sequences (>4096) where the crash occurs.
-        if k > 4096 {
-            ctx.gpu.synchronize(stream).map_err(|e| {
-                anyhow::anyhow!("ssm phase1: SYNC after QKVZ GEMM (M={k} N={qkvz_size}): {e}")
-            })?;
-        }
         if !self.sequential_qkvz {
             ops::deinterleave_qkvz(
                 ctx.gpu,
@@ -182,11 +165,6 @@ impl Qwen3SsmLayer {
             )?;
         }
 
-        if k > 4096 {
-            ctx.gpu
-                .synchronize(stream)
-                .map_err(|e| anyhow::anyhow!("ssm phase1: SYNC after deinterleave (M={k}): {e}"))?;
-        }
         // ── 4+5. Fused BA GEMM + GDN gates (token-parallel) ──
         let ba_size = ctx.config.ssm_ba_size();
         let gates_buf = ctx.buffers.ssm_gates();
@@ -209,11 +187,6 @@ impl Qwen3SsmLayer {
             stream,
         )?;
 
-        if k > 4096 {
-            ctx.gpu
-                .synchronize(stream)
-                .map_err(|e| anyhow::anyhow!("ssm phase1: SYNC after BA+gates (M={k}): {e}"))?;
-        }
         // ── 6. Batched conv1d for all N tokens ──
         let conv_out_buf = ctx.buffers.ssm_qkvz();
         ops::conv1d_update_prefill(
@@ -231,11 +204,6 @@ impl Qwen3SsmLayer {
             conv_dim as u32,
             stream,
         )?;
-        if k > 4096 {
-            ctx.gpu
-                .synchronize(stream)
-                .map_err(|e| anyhow::anyhow!("ssm phase1: SYNC after conv1d (M={k}): {e}"))?;
-        }
 
         // ── 7. Batched L2 norm on Q,K for all N tokens ──
         ops::l2_norm(
