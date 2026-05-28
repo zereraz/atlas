@@ -83,3 +83,12 @@ doc_overindented_list_items = "allow"
 type_complexity = "allow"
 ptr_arg = "allow"
 if_same_then_else = "allow"
+
+# Added 2026-05-28: aggressive release profile for maximum runtime speed.
+# fat LTO inlines across crates, codegen-units=1 lets the optimizer see
+# the whole binary, panic=abort drops landing-pad code from hot paths.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+panic = "abort"
