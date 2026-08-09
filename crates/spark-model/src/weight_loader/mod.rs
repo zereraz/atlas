@@ -107,6 +107,9 @@ impl WeightFormat {
             // Bf16Raw fine-tunes get runtime-quantized to NVFP4 inside the
             // weight loader, so the downstream pipeline sees Nvfp4.
             Nvfp4Variant::Bf16Raw => Self::Nvfp4,
+            // MXFP4 experts are dequanted→BF16 then runtime-quantized to NVFP4,
+            // so the downstream pipeline sees Nvfp4.
+            Nvfp4Variant::Mxfp4Dequanted => Self::Nvfp4,
         }
     }
 

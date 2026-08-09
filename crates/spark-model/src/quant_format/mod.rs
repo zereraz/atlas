@@ -171,6 +171,13 @@ pub fn detect_quant_format(config: &ModelConfig, store: &WeightStore) -> Box<dyn
             );
             Box::new(ModeloptFormat::new(String::new(), ignore)) as Box<dyn QuantFormat>
         }
+        Nvfp4Variant::Mxfp4Dequanted => {
+            // MXFP4 block-scaled e2m1 (Ling-3.0-flash). Dequant→BF16→NVFP4 at
+            // load; ModeloptFormat with empty prefix so `variant_for` routes to
+            // `Mxfp4Dequanted` for the experts.
+            tracing::info!("QuantFormat: mxfp4-pack-quantized (block-scaled e2m1); experts dequant→BF16→NVFP4");
+            Box::new(ModeloptFormat::new(String::new(), ignore)) as Box<dyn QuantFormat>
+        }
     }
 }
 

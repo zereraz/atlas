@@ -141,6 +141,21 @@ pub(crate) fn load_moe_qwen35(
                 up_proj: load_bf16_then_nvfp4(&format!("{prefix}.up_proj"), inter, h)?,
                 down_proj: load_bf16_then_nvfp4(&format!("{prefix}.down_proj"), h, inter)?,
             }),
+            Nvfp4Variant::Mxfp4Dequanted => {
+                let mx = |name: &str, n, k| {
+                    let bf16 = DenseWeight {
+                        weight: dequant_mxfp4_to_bf16(store, name, gpu)?,
+                    };
+                    let q = quantize_to_nvfp4(&bf16, n, k, gpu, absmax_k, quantize_k, stream)?;
+                    gpu.free(bf16.weight)?;
+                    Ok::<QuantizedWeight, anyhow::Error>(q)
+                };
+                Ok(ExpertWeight {
+                    gate_proj: mx(&format!("{prefix}.gate_proj"), inter, h)?,
+                    up_proj: mx(&format!("{prefix}.up_proj"), inter, h)?,
+                    down_proj: mx(&format!("{prefix}.down_proj"), h, inter)?,
+                })
+            }
             Nvfp4Variant::Fp8Dequanted => Ok(ExpertWeight {
                 gate_proj: quantized_from_fp8(
                     store,

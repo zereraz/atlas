@@ -142,7 +142,8 @@ impl ModelWeightLoader for Qwen35DenseWeightLoader {
                         }
                         Nvfp4Variant::Standard
                         | Nvfp4Variant::Fp8Dequanted
-                        | Nvfp4Variant::Bf16Raw => {
+                        | Nvfp4Variant::Bf16Raw
+                        | Nvfp4Variant::Mxfp4Dequanted => {
                             // BF16 → NVFP4 path: shard BF16 then quantize per-rank.
                             let load_bf16_then_nvfp4 = |name: &str,
                                                         full_n: usize,
