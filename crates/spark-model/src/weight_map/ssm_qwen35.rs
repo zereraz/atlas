@@ -104,7 +104,7 @@ pub(crate) fn load_ssm_bailing(
     let o_norm = dense(store, &format!("{p}.o_norm.weight"))?;
 
     // Stack conv1d: q_conv + k_conv + v_conv → [3*d, 1, kernel] in Q|K|V order.
-    let conv_shape = store.get(&format!("{p}.q_conv1d.weight"))?.shape;
+    let conv_shape = &store.get(&format!("{p}.q_conv1d.weight"))?.shape;
     let kernel = *conv_shape.get(2).unwrap_or(&1usize);
     let d_conv = conv_shape[0] * kernel * 2; // bytes per conv row
     let conv_buf = gpu.alloc(d_conv * 3)?;
