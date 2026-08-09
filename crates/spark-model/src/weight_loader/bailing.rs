@@ -174,7 +174,7 @@ fn build_linear_attention_bailing(
     store: &WeightStore,
     lp: &str,
     gpu: &dyn GpuBackend,
-    variant: crate::weight_map::Nvfp4Variant,
+    _variant: crate::weight_map::Nvfp4Variant,
     config: &ModelConfig,
     h: usize,
     absmax_k: spark_runtime::gpu::KernelHandle,
@@ -265,7 +265,7 @@ fn build_full_attention_bailing(
     store: &WeightStore,
     lp: &str,
     gpu: &dyn GpuBackend,
-    variant: crate::weight_map::Nvfp4Variant,
+    _variant: crate::weight_map::Nvfp4Variant,
     config: &ModelConfig,
     layer_kv_dtype: spark_runtime::kv_cache::KvCacheDtype,
     attn_idx: usize,
@@ -290,11 +290,6 @@ fn build_full_attention_bailing(
 
     let gpu_alloc_or_managed = |bytes: usize| -> Result<spark_runtime::gpu::DevicePtr> {
         gpu.alloc(bytes)
-    };
-    let alloc_zero_bf16 = |bytes: usize| -> Result<spark_runtime::gpu::DevicePtr> {
-        let ptr = gpu.alloc(bytes)?;
-        gpu.memset(ptr, 0, bytes)?;
-        Ok(ptr)
     };
     let quantize_k = gpu.kernel("quantize_nvfp4", "quantize_bf16_to_nvfp4")?;
     let absmax_k = gpu.kernel("quantize_nvfp4", "nvfp4_global_absmax")?;
@@ -500,7 +495,7 @@ fn build_full_attention_bailing(
         v_dim,
     };
 
-    let layer = Qwen3AttentionLayer::new(
+    let mut layer = Qwen3AttentionLayer::new_ungated(
         input_norm,
         attn,
         post_attn_norm,
@@ -514,6 +509,8 @@ fn build_full_attention_bailing(
         config.fp8_kv_calibration_tokens,
         config,
     )?;
+    layer.set_mla_weights(mla);
+    let _ = g_proj; // output gate lives on the MLA forward path
 
     Ok(Box::new(layer))
 }
