@@ -23,6 +23,8 @@ mod model_a;
 mod model_b;
 #[path = "weight_map/moe.rs"]
 mod moe;
+#[path = "weight_map/mxfp4.rs"]
+mod mxfp4;
 #[path = "weight_map/nemotron.rs"]
 mod nemotron;
 #[path = "weight_map/nvfp4_detect.rs"]
@@ -55,4 +57,6 @@ pub use ssm_qwen35::*;
 
 // Modules whose only exports are `pub(crate)` / `pub(super)` helpers.
 #[allow(unused_imports)]
-pub(crate) use {fp8_lut::*, loaders_moe::*, model_b::*, quant_helpers::*, ssm_qwen35_more::*};
+pub(crate) use {
+    fp8_lut::*, loaders_moe::*, model_b::*, mxfp4::*, quant_helpers::*, ssm_qwen35_more::*
+};
