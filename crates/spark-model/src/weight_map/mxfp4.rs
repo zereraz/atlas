@@ -24,6 +24,8 @@ use anyhow::{Context, Result, ensure};
 use spark_runtime::gpu::{DevicePtr, GpuBackend};
 use spark_runtime::weights::{WeightDtype, WeightStore};
 
+use super::fp8_lut::fp8_e4m3_to_f32;
+
 /// f32 → BF16 (little-endian 2-byte), truncating the low 16 bits.
 #[inline]
 pub(crate) fn bf16_bytes_from_f32(v: f32) -> [u8; 2] {
@@ -44,24 +46,6 @@ pub(crate) fn e2m1_to_f32(nibble: u8) -> f32 {
     const MAG: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
     let sign = if nibble & 0x8 != 0 { -1.0 } else { 1.0 };
     sign * MAG[(nibble & 0x7) as usize]
-}
-
-/// float8_e4m3 (OCP) → f32. 1 sign, 4 exponent (bias 7), 3 mantissa.
-/// Handles subnormals (exponent field 0) and the NaN code (S.1111.111).
-/// No infinity in e4m3fn; max finite = 448.
-#[inline]
-pub(crate) fn e4m3_to_f32(byte: u8) -> f32 {
-    let sign = if byte & 0x80 != 0 { -1.0f32 } else { 1.0f32 };
-    let exp = ((byte >> 3) & 0x0F) as i32;
-    let man = (byte & 0x07) as f32;
-    let val = if exp == 0 {
-        // subnormal: value = mantissa * 2^-6
-        man / 8.0 * f32::powi(2.0, -6)
-    } else {
-        // normal: value = (1 + mantissa/8) * 2^(exp-7)
-        (1.0 + man / 8.0) * f32::powi(2.0, exp - 7)
-    };
-    sign * val
 }
 
 /// Dequant one MXFP4-packed 2D weight to BF16 on GPU.
@@ -131,7 +115,7 @@ pub(crate) fn dequant_mxfp4_to_bf16(
             let byte = packed_buf[packed_row + col / 2];
             // Little-nibble first: even col = low nibble, odd col = high nibble.
             let nibble = if col % 2 == 0 { byte & 0x0F } else { byte >> 4 };
-            let s = e4m3_to_f32(scale_buf[scale_row + col / group]);
+            let s = fp8_e4m3_to_f32(scale_buf[scale_row + col / group]);
             let v = e2m1_to_f32(nibble) * s;
             let b = bf16_bytes_from_f32(v);
             bf16_out[(out_row + col) * 2] = b[0];
@@ -143,4 +127,46 @@ pub(crate) fn dequant_mxfp4_to_bf16(
     gpu.copy_h2d(&bf16_out, ptr)
         .with_context(|| format!("H2D upload failed for {prefix} dequant"))?;
     Ok(ptr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn e2m1_lut_matches_spec() {
+        // E2M1 magnitudes: code → value (1 sign, 2 exp, 1 mantissa).
+        assert_eq!(e2m1_to_f32(0x0), 0.0);
+        assert_eq!(e2m1_to_f32(0x1), 0.5);
+        assert_eq!(e2m1_to_f32(0x2), 1.0);
+        assert_eq!(e2m1_to_f32(0x3), 1.5);
+        assert_eq!(e2m1_to_f32(0x4), 2.0);
+        assert_eq!(e2m1_to_f32(0x5), 3.0);
+        assert_eq!(e2m1_to_f32(0x6), 4.0);
+        assert_eq!(e2m1_to_f32(0x7), 6.0);
+        // Sign bit.
+        assert_eq!(e2m1_to_f32(0x8), -0.0);
+        assert_eq!(e2m1_to_f32(0x9), -0.5);
+        assert_eq!(e2m1_to_f32(0xF), -6.0);
+    }
+
+    #[test]
+    fn bf16_bytes_roundtrip() {
+        // 1.0f32 = 0x3F800000 → BF16 high half 0x3F80 → bytes [0x80, 0x3F].
+        assert_eq!(bf16_bytes_from_f32(1.0), [0x80, 0x3F]);
+        // -2.0f32 = 0xC0000000 → BF16 0xC000 → bytes [0x00, 0xC0].
+        assert_eq!(bf16_bytes_from_f32(-2.0), [0x00, 0xC0]);
+        // 0.5f32 = 0x3F000000 → [0x00, 0x3F].
+        assert_eq!(bf16_bytes_from_f32(0.5), [0x00, 0x3F]);
+    }
+
+    #[test]
+    fn mxfp4_scalar_composition() {
+        // e2m1=1.5 (code 0x3) × e4m3 scale 2.0 (0x40: exp=8 → 2^(8-7)*(1+0)=2.0)
+        // → 3.0. Verifies the two LUTs compose into the expected product.
+        let product = e2m1_to_f32(0x3) * fp8_e4m3_to_f32(0x40);
+        assert!((product - 3.0).abs() < 1e-6, "product={product}");
+        // e4m3 2.0 reference: byte 0x40 = S0 exp=1000(8) mant=000 → 2.0.
+        assert_eq!(fp8_e4m3_to_f32(0x40), 2.0);
+    }
 }
