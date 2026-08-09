@@ -184,7 +184,7 @@ fn build_linear_attention_bailing(
     post_attn_norm: DenseWeight,
     ffn: FfnComponent,
 ) -> Result<Box<dyn TransformerLayer>> {
-    let ssm35 = load_ssm_bailing(store, lp, gpu, variant)?;
+    let ssm35 = load_ssm_bailing(store, lp, gpu, _variant)?;
 
     let qkv_rows = config.ssm_qkv_size();
     let z_rows = config.ssm_z_size();
@@ -261,7 +261,7 @@ fn build_linear_attention_bailing(
 /// rope-portion extraction, the output-gate wiring.
 #[allow(clippy::too_many_arguments)]
 fn build_full_attention_bailing(
-    i: usize,
+    _i: usize,
     store: &WeightStore,
     lp: &str,
     gpu: &dyn GpuBackend,
