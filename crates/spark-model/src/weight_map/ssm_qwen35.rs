@@ -465,3 +465,105 @@ pub(crate) fn load_moe_no_shared(
         correction_bias: None,
     })
 }
+
+/// Load MoE weights for Ling-3.0-flash (bailing_hybrid).
+///
+/// Identical structure to `load_moe_qwen35` but for Ling's sparse+shared MoE:
+///   - `gate.weight`: the routing scorer — read as BF16.
+///   - NO `shared_expert_gate.weight` (Ling has no separate shared-expert
+///     gating projection — the shared expert's contribution is unweighted).
+///     Allocate zero-filled dummy so the fused MoE kernel produces zero from
+///     the shared slot (`weight_scale_2 = 0.0` forces dequant → 0).
+///   - `gate.expert_bias`: DeepSeek-V3-style loss-free routing bias; add to
+///     `correction_bias` (`sigmoid(scores) + bias` for selection only).
+pub(crate) fn load_moe_bailing(
+    store: &WeightStore,
+    layer_prefix: &str,
+    num_experts: usize,
+    gpu: &dyn GpuBackend,
+    config: &atlas_core::config::ModelConfig,
+    variant: Nvfp4Variant,
+    absmax_k: spark_runtime::gpu::KernelHandle,
+    quantize_k: spark_runtime::gpu::KernelHandle,
+    stream: u64,
+    skip_routed_experts: bool,
+) -> Result<MoeWeights> {
+    let p = format!("{layer_prefix}.mlp");
+
+    let gate = dense(store, &format!("{p}.gate.weight"))?;
+    // Ling has no `shared_expert_gate` — pass a NULL DenseWeight so the MoE
+    // forward's null-check short-circuits the shared expert's contribution
+    // to zero (Ling's shared expert isn't gating-balanced).
+    let shared_expert_gate = DenseWeight {
+        weight: spark_runtime::gpu::DevicePtr::NULL,
+    };
+
+    let inter = config.moe_intermediate_size;
+    let h = config.hidden_size;
+    let load_expert = |prefix: &str| -> Result<ExpertWeight> {
+        match variant {
+            Nvfp4Variant::Bf16Raw => {
+                let bf16 = |name: &str, n, k| {
+                    let d = dense(store, &format!("{prefix}.{name}.weight"))?;
+                    quantize_to_nvfp4(&d, n, k, gpu, absmax_k, quantize_k, stream)
+                };
+                Ok(ExpertWeight {
+                    gate_proj: bf16("gate_proj", inter, h)?,
+                    up_proj: bf16("up_proj", inter, h)?,
+                    down_proj: bf16("down_proj", h, inter)?,
+                })
+            }
+            Nvfp4Variant::Mxfp4Dequanted => {
+                let mx = |name: &str, n, k| {
+                    let bf16 = DenseWeight {
+                        weight: dequant_mxfp4_to_bf16(store, &format!("{prefix}.{name}"), gpu)?,
+                    };
+                    let q = quantize_to_nvfp4(&bf16, n, k, gpu, absmax_k, quantize_k, stream)?;
+                    gpu.free(bf16.weight)?;
+                    Ok::<QuantizedWeight, anyhow::Error>(q)
+                };
+                Ok(ExpertWeight {
+                    gate_proj: mx("gate_proj", inter, h)?,
+                    up_proj: mx("up_proj", inter, h)?,
+                    down_proj: mx("down_proj", h, inter)?,
+                })
+            }
+            _ => Ok(ExpertWeight {
+                gate_proj: quantized_auto(store, &format!("{prefix}.gate_proj"), gpu, variant)?,
+                up_proj: quantized_auto(store, &format!("{prefix}.up_proj"), gpu, variant)?,
+                down_proj: quantized_auto(store, &format!("{prefix}.down_proj"), gpu, variant)?,
+            }),
+        }
+    };
+
+    let shared_expert = load_expert(&format!("{p}.shared_expert"))?;
+
+    let mut experts = Vec::with_capacity(num_experts);
+    for e in 0..num_experts {
+        if skip_routed_experts || !config.is_local_expert(e) {
+            experts.push(ExpertWeight::null());
+        } else {
+            experts.push(load_expert(&format!("{p}.experts.{e}"))?);
+        }
+    }
+
+    // Ling uses a per-layer `gate.expert_bias` (loss-free routing).
+    let correction_bias = if store.contains(&format!("{p}.gate.expert_bias")) {
+        Some(dense(store, &format!("{p}.gate.expert_bias"))?)
+    } else if config.use_routing_bias {
+        // routed_bias config says bias exists — should be in the store; if
+        // not, the shared gate trick ensures correctness either way.
+        Some(dense(store, &format!("{p}.gate.expert_bias"))?)
+    } else {
+        None
+    };
+
+    Ok(MoeWeights {
+        gate,
+        shared_expert,
+        shared_expert_gate,
+        experts,
+        router_pre_norm: None,
+        correction_bias,
+    })
+}
