@@ -244,27 +244,276 @@ fn build_linear_attention_bailing(
 
 /// Ling MLA full-attention layer assembly.
 ///
-/// Ling has `q_lora_rank = null` (a direct `q_proj`, no `wq_a`/`wq_b` split)
-/// and uses absorbed MLA with latent KV (kv_lora_rank=512, rope=64, nope=128,
-/// v=128). The absorbed-weight construction (wq_b split, w_uk_t, w_uv,
-/// block-diagonals, yarn) mirrors Qwen3.5's `phase_*` MLA helpers and is the
-/// remaining careful algebra. Stubbed to fail loudly at load time until wired.
+/// Ling has `q_lora_rank = null` (direct `attention.q_proj` [6144, h], no
+/// `wq_a`/`wq_b` split), KV-latent MLA (`kv_lora_rank=512`, `rope=64`,
+/// `nope=128`, `v_dim=128`). Builds `MlaWeights`:
+///
+///   * `wq_a` = identity `I(h)`; `wq_b` = `q_proj` rows.
+///   * `w_qk_absorbed[n, lkv, l] = sum_p(q_nope[n*hd+p∈nope, l] * w_uk[n, lkv, p])`
+///     (p = rope_offset+nope → only the nope-part of q_proj).
+///   * `wq_b_rope` = q_proj rows [n*hd+nope .. n*hd+hd] (rope portion only).
+///   * `w_uk_t` = wkv_b's nope portion transposed per head.
+///   * `w_uv` = wkv_b's v-portion rows per head.
+///   * `wkv_a` = kv_a_proj_with_mqa rows [0..512]; `wkv_a_rope` = rows [512..576].
+///   * `wo` = `attention.dense`, gated by `attention.g_proj` (attn_output_gate).
+///
+/// Mirrors `mistral_loader/phase_*` algebra; Ling-specific: no LoRA for Q, the
+/// rope-portion extraction, the output-gate wiring.
 #[allow(clippy::too_many_arguments)]
 fn build_full_attention_bailing(
     i: usize,
-    _store: &WeightStore,
+    store: &WeightStore,
     lp: &str,
-    _gpu: &dyn GpuBackend,
-    _variant: crate::weight_map::Nvfp4Variant,
-    _config: &ModelConfig,
-    _layer_kv_dtype: KvCacheDtype,
-    _attn_idx: usize,
-    _input_norm: DenseWeight,
-    _post_attn_norm: DenseWeight,
-    _ffn: FfnComponent,
+    gpu: &dyn GpuBackend,
+    variant: crate::weight_map::Nvfp4Variant,
+    config: &ModelConfig,
+    layer_kv_dtype: crate::kv_cache::KvCacheDtype,
+    attn_idx: usize,
+    input_norm: DenseWeight,
+    post_attn_norm: DenseWeight,
+    ffn: FfnComponent,
 ) -> Result<Box<dyn TransformerLayer>> {
-    anyhow::bail!(
-        "Ling[{i}]: MLA full-attention assembly ({lp}.attention.*) not yet implemented — \
-         see LING_RUST_ATLAS.md"
-    )
+    use crate::layers::qwen3_attention::MlaWeights;
+    use crate::layers::{FfnComponent, Qwen3AttentionLayer};
+    use crate::weight_map::{AttentionWeights, dense};
+
+    let p = format!("{lp}.attention");
+    let h = config.hidden_size;
+    let n_heads = config.num_attention_heads;
+    let n_kv = config.num_key_value_heads;
+    let kv_lora = config.kv_lora_rank;
+    let nope = config.qk_nope_head_dim;
+    let rope = config.qk_rope_head_dim;
+    let v_dim = config.v_head_dim;
+    let hd = config.head_dim;
+    let bf16 = 2usize;
+
+    let gpu_alloc_or_managed = |bytes: usize| -> Result<spark_runtime::gpu::DevicePtr> {
+        gpu.alloc(bytes)
+    };
+    let alloc_zero_bf16 = |bytes: usize| -> Result<spark_runtime::gpu::DevicePtr> {
+        let ptr = gpu.alloc(bytes)?;
+        gpu.memset(ptr, 0, bytes)?;
+        Ok(ptr)
+    };
+    let quantize_k = gpu.kernel("quantize_nvfp4", "quantize_bf16_to_nvfp4")?;
+    let absmax_k = gpu.kernel("quantize_nvfp4", "nvfp4_global_absmax")?;
+    let stream = gpu.default_stream();
+
+    // ── Load raw Ling ML projections ──────────────────────────────────────────
+    // All BF16 (in modules_to_not_convert).
+    let q_proj = dense(store, &format!("{p}.q_proj.weight"))?; // [6144, 2560]
+    let kv_a = dense(store, &format!("{p}.kv_a_proj_with_mqa.weight"))?; // [576, 2560]
+    let kv_b = dense(store, &format!("{p}.kv_b_proj.weight"))?; // [32*(128+128), 512]
+    let kv_a_norm = dense(store, &format!("{p}.kv_a_layernorm.weight"))?; // [512]
+    let o_dense = dense(store, &format!("{p}.dense.weight"))?; // [2560, 4096]
+    let g_proj = dense(store, &format!("{p}.g_proj.weight"))?; // [2560, 5120] (output gate)
+
+    // ── wq_a / wq_b: identity + q_proj ─────────────────────────────────────────�
+    // Ling has no Q-lora. Set wq_a = identity I(h) so
+    // `q_proj @ I(h)` = q_proj directly in absorbed-path.
+    let wq_a_dense = gpu_alloc_or_managed(h * h * bf16)?;
+    {
+        let mut eye = vec![0u8; h * h * bf16];
+        for r in 0..h {
+            // 1.0 f32 → BF16 bytes: f32:1.0=0x3F80; BF16:0x3F80 = [0x80,0x3F]
+            eye[(r * h + r) * bf16] = 0x80;
+            eye[(r * h + r) * bf16 + 1] = 0x3F;
+        }
+        gpu.copy_h2d(&eye, wq_a_dense)?;
+    }
+    let wq_b_dense = q_proj; // [6144, 2560] direct
+
+    // ── kv_a split: latent[0..512] + rope[512..576] ─────────────────────────
+    let wkv_a_dense = DenseWeight {
+        weight: kv_a.weight, // first kv_lora rows
+    };
+    let wkv_a_rope_dense = DenseWeight {
+        weight: kv_a.weight.offset(kv_lora * h * bf16),
+    };
+    let wkv_b_dense = kv_b; // [n_kv*(nope+v), kv_lora] = [32*256, 512]
+    let kv_a_norm_dense = kv_a_norm;
+
+    // ── Absorbed weights (from mistral phase_per_head + phase_qk_absorbed) ──
+    let stride = nope + v_dim; // 256 per head
+    let wkv_b_total_rows = n_kv * stride;
+    let wkv_b_bytes = wkv_b_total_rows * kv_lora * bf16;
+
+    // Transpose K-nope portion per head: wkv_b row (n, p, lkv) → w_uk[n][lkv][p]
+    let w_uk_per_head = kv_lora * nope * bf16;
+    let mut wkv_b_host = vec![0u8; wkv_b_bytes];
+    gpu.copy_d2h(wkv_b_dense.weight, &mut wkv_b_host)?;
+    let mut w_uk_host = vec![0u8; n_kv * w_uk_per_head];
+    for head in 0..n_kv {
+        for p in 0..nope {
+            for lkv in 0..kv_lora {
+                let src_off = ((head * stride + p) * kv_lora + lkv) * bf16;
+                let dst_off = (head * kv_lora * nope + lkv * nope + p) * bf16;
+                w_uk_host[dst_off..dst_off + bf16]
+                    .copy_from_slice(&wkv_b_host[src_off..src_off + bf16]);
+            }
+        }
+    }
+    let w_uk_t_ptr = gpu_alloc_or_managed(n_kv * w_uk_per_head)?;
+    gpu.copy_h2d(&w_uk_host, w_uk_t_ptr)?;
+
+    // W_UV: v-portion rows per head (attn_latent @ W_UV → [V])
+    let w_uv_ptr = gpu_alloc_or_managed(n_kv * kv_lora * v_dim * bf16)?;
+    for head in 0..n_kv {
+        for v in 0..v_dim {
+            let src_row = head * stride + nope + v;
+            let src = wkv_b_dense.weight.offset(src_row * kv_lora * bf16);
+            let dst = w_uv_ptr.offset((head * v_dim * kv_lora + v * kv_lora) * bf16);
+            gpu.copy_d2d(src, dst, kv_lora * bf16)?;
+        }
+    }
+
+    // WQK absorbed: for Ling, wq_b = q_proj [6144, h] rows;
+    // w_qk_absorbed[n, lkv, l] = sum_p(q_nope[n*hd + (p∈nope), l] * w_uk[n, lkv, p]).
+    let q_lora = nope + rope; // 192 rows per head (nope + rope)
+    let wqk_size = n_kv * kv_lora * q_lora * bf16;
+    let mut wqb_host = vec![0u8; n_heads * hd * h * bf16];
+    gpu.copy_d2h(wq_b_dense.weight, &mut wqb_host)?;
+    let mut wqk_f32 = vec![0.0f32; n_kv * kv_lora * q_lora];
+    let to_f32 = |buf: &[u8], idx: usize| -> f32 {
+        let bits = u16::from_le_bytes([buf[idx * 2], buf[idx * 2 + 1]]);
+        f32::from_bits((bits as u32) << 16)
+    };
+    for n in 0..n_kv {
+        for lkv in 0..kv_lora {
+            for l in 0..q_lora {
+                let mut sum = 0.0f32;
+                for p in 0..nope {
+                    let wqb_val = to_f32(&wqb_host, (n * hd + p) * h + l);
+                    let wuk_val = to_f32(&w_uk_host, n * kv_lora * nope + lkv * nope + p);
+                    sum += wqb_val * wuk_val;
+                }
+                wqk_f32[(n * kv_lora + lkv) * q_lora + l] = sum;
+            }
+        }
+    }
+    let wqk_bf16: Vec<u8> = wqk_f32
+        .iter()
+        .flat_map(|&v| {
+            let bits = (v.to_bits() >> 16) as u16;
+            bits.to_le_bytes().to_vec()
+        })
+        .collect();
+    let wqk_ptr = gpu_alloc_or_managed(wqk_size)?;
+    gpu.copy_h2d(&wqk_bf16, wqk_ptr)?;
+
+    // wq_b_rope: rows [n*hd+nope .. n*hd+q_lora] (rope portion only)
+    let wqbr_size = n_heads * rope * h * bf16;
+    let wqbr_ptr = gpu_alloc_or_managed(wqbr_size)?;
+    for head in 0..n_heads {
+        for r in 0..rope {
+            let src_row = head * hd + nope + r;
+            let src = wq_b_dense.weight.offset(src_row * h * bf16);
+            let dst = wqbr_ptr.offset((head * rope + r) * h * bf16);
+            gpu.copy_d2d(src, dst, rope * h * bf16)?;
+        }
+    }
+
+    // Block-diagonal W_UK for prefill: same as w_uk_t (single block).
+    let w_uk_block_diag_ptr = gpu_alloc_or_managed(n_kv * w_uk_per_head)?;
+    gpu.copy_d2d(w_uk_t_ptr, w_uk_block_diag_ptr, n_kv * w_uk_per_head)?;
+    let w_uv_block_diag_ptr = gpu_alloc_or_managed(n_kv * kv_lora * v_dim * bf16)?;
+    gpu.copy_d2d(w_uv_ptr, w_uv_block_diag_ptr, n_kv * kv_lora * v_dim * bf16)?;
+
+    // ── Output projection + gating ─────────────────────────────────────────
+    let wo_nvfp4 = Some(quantize_to_nvfp4(
+        &o_dense,
+        h,
+        n_heads * v_dim,
+        gpu,
+        absmax_k,
+        quantize_k,
+        stream,
+    )?);
+
+    let attn = AttentionWeights {
+        q_proj: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        k_proj: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        v_proj: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        o_proj: wo_nvfp4.clone().unwrap(),
+        q_norm: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        k_norm: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        q_norm_full: None,
+        k_norm_full: None,
+        k_scale: 1.0,
+        v_scale: 1.0,
+    };
+
+    let mla = MlaWeights {
+        wq_a: DenseWeight { weight: wq_a_dense },
+        wq_a_nvfp4: Some(quantize_to_nvfp4(
+            &DenseWeight { weight: wq_a_dense },
+            h,
+            h,
+            gpu,
+            absmax_k,
+            quantize_k,
+            stream,
+        )?),
+        wq_b: wq_b_dense,
+        wq_b_nvfp4: Some(quantize_to_nvfp4(&wq_b_dense, n_heads * hd, h, gpu, absmax_k, quantize_k, stream)?),
+        q_a_norm: DenseWeight {
+            weight: spark_runtime::gpu::DevicePtr::NULL,
+        },
+        wkv_a: DenseWeight { weight: wkv_a_dense.weight },
+        wkv_a_nvfp4: Some(quantize_to_nvfp4(
+            &DenseWeight { weight: wkv_a_dense.weight },
+            kv_lora,
+            h,
+            gpu,
+            absmax_k,
+            quantize_k,
+            stream,
+        )?),
+        wkv_b: wkv_b_dense,
+        kv_a_norm: kv_a_norm_dense,
+        wkv_a_rope: DenseWeight { weight: wkv_a_rope_dense.weight },
+        wkv_a_merged: DenseWeight { weight: wkv_a_dense.weight },
+        wo: o_dense,
+        wo_nvfp4,
+        wq_b_rope: DenseWeight { weight: wqbr_ptr },
+        w_uk_t: DenseWeight { weight: w_uk_t_ptr },
+        w_uv: DenseWeight { weight: w_uv_ptr },
+        w_qk_absorbed: DenseWeight { weight: wqk_ptr },
+        w_uk_block_diag: DenseWeight { weight: w_uk_block_diag_ptr },
+        w_uv_block_diag: DenseWeight { weight: w_uv_block_diag_ptr },
+        yarn_inv_freq: spark_runtime::gpu::DevicePtr::NULL,
+        q_lora_rank: q_lora, // 192
+        kv_lora_rank: kv_lora,
+        nope,
+        rope,
+        v_dim,
+    };
+
+    let layer = Qwen3AttentionLayer::new(
+        input_norm,
+        attn,
+        post_attn_norm,
+        ffn,
+        attn_idx,
+        None,
+        None,
+        None,
+        gpu,
+        layer_kv_dtype,
+        config.fp8_kv_calibration_tokens,
+        config,
+    )?;
+
+    Ok(Box::new(layer))
 }
