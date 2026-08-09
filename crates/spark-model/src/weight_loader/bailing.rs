@@ -436,7 +436,7 @@ fn build_full_attention_bailing(
         v_proj: DenseWeight {
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
-        o_proj: wo_nvfp4.clone().unwrap(),
+        o_proj: wo_nvfp4.unwrap(),
         q_norm: DenseWeight {
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
