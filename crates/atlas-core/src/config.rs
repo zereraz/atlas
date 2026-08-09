@@ -174,7 +174,9 @@ pub struct ModelConfig {
     #[serde(default, skip_deserializing, skip_serializing)]
     pub kv_layer_dims: Vec<(usize, usize)>,
     /// Query latent dimension for low-rank Q projection. 0 = standard Q.
-    #[serde(default)]
+    /// Ling has `q_lora_rank: null` in config.json (no Q down-proj) — accept
+    /// null as "0" via custom deserializer.
+    #[serde(default, deserialize_with = "null_to_zero")]
     pub q_lora_rank: usize,
     /// Non-rotary portion of Q/K per head (NoPE component).
     #[serde(default)]
@@ -423,6 +425,16 @@ mod dispatch;
 mod factory;
 mod methods;
 mod parsers;
+
+/// Deserializer: `null` → `0` (Ling `q_lora_rank: null`). Public so
+/// subsidiary config enums can reuse it if future fields also accept nulls.
+pub fn null_to_zero<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Option::<usize>::deserialize(deserializer).map(|o| o.unwrap_or(0))
+}
 #[cfg(test)]
 mod tests;
 
