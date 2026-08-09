@@ -34,7 +34,7 @@ use spark_runtime::weights::WeightStore;
 use super::ModelWeightLoader;
 use super::qwen35::Qwen35WeightLoader;
 use crate::layer::TransformerLayer;
-use crate::weight_map::DenseWeight;
+use crate::weight_map::{DenseWeight, MtpWeights};
 
 /// Ling-3.0-flash (bailing_hybrid). Layer loading is delegated to the
 /// Qwen35 engine (architecture is a clone); only embeddings + norms +
@@ -106,5 +106,17 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
         } else {
             self.inner.load_lm_head(store, config)
         }
+    }
+
+    fn load_mtp_weights(
+        &self,
+        store: &WeightStore,
+        config: &ModelConfig,
+        gpu: &dyn GpuBackend,
+    ) -> Result<Option<MtpWeights>> {
+        // Ling's MTP block is at layer 42: eh_proj/enorm/hnorm + unquantized
+        // BF16 experts + MLA attention (`mtp_use_kda:false` → full-attn, NOT
+        // KDA). Reuse the standard load_mtp pipeline via the inner loader.
+        self.inner.load_mtp_weights(store, config, gpu)
     }
 }
