@@ -132,4 +132,9 @@ pub enum Nvfp4Variant {
     /// dequant step. Quality is suboptimal vs. a pre-calibrated NVFP4 release —
     /// the user gets a warning at startup.
     Bf16Raw,
+    /// MXFP4 block-scaled e2m1 (e.g. inclusionAI/Ling-3.0-flash-MXFP4):
+    /// `.weight_packed` (u8, 2 e2m1/byte) + `.weight_scale` (e4m3, per-32 group).
+    /// NO per-tensor global scale (unlike NVFP4). Dequant to BF16 at load time,
+    /// then runtime-quantize to NVFP4 — same pipeline as Fp8Dequanted/Bf16Raw.
+    Mxfp4Dequanted,
 }

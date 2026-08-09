@@ -40,9 +40,15 @@ pub fn detect_nvfp4_variant(
                 return Nvfp4Variant::Fp8Dequanted;
             }
             "compressed-tensors" => {
-                // `format` is the sub-selector here. Treat anything
-                // containing "fp8" as block-scaled FP8, else assume NVFP4.
-                if qc.format.to_ascii_lowercase().contains("fp8") {
+                // `format` is the sub-selector. MXFP4 (block-scaled e2m1,
+                // no per-tensor global scale) must NOT go down the NVFP4
+                // `quantized_v2` path — it would fail on missing
+                // `weight_global_scale`. Detect it explicitly first.
+                let fmt = qc.format.to_ascii_lowercase();
+                if fmt.contains("mxfp4") {
+                    return Nvfp4Variant::Mxfp4Dequanted;
+                }
+                if fmt.contains("fp8") {
                     return Nvfp4Variant::Fp8Dequanted;
                 }
                 return Nvfp4Variant::CompressedTensors;
@@ -176,6 +182,9 @@ pub(crate) fn quantized_auto(
         Nvfp4Variant::Bf16Raw => {
             unreachable!("Bf16Raw must use quantized_any with quant context")
         }
+        Nvfp4Variant::Mxfp4Dequanted => {
+            unreachable!("Mxfp4Dequanted must use quantized_any with quant context")
+        }
     }
 }
 
@@ -241,6 +250,23 @@ pub(crate) fn quantized_any(
                 qctx.quantize_k,
                 qctx.stream,
             )
+        }
+        Nvfp4Variant::Mxfp4Dequanted => {
+            // MXFP4 block-scaled e2m1: dequant to BF16, then runtime-quantize.
+            let bf16_ptr = dequant_mxfp4_to_bf16(store, prefix, gpu)?;
+            let bf16 = DenseWeight { weight: bf16_ptr };
+            let result = quantize_to_nvfp4(
+                &bf16,
+                n,
+                k,
+                gpu,
+                qctx.absmax_k,
+                qctx.quantize_k,
+                qctx.stream,
+            )?;
+            // Free the BF16 intermediate — only the NVFP4 result is needed.
+            gpu.free(bf16_ptr)?;
+            Ok(result)
         }
     }
 }

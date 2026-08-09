@@ -55,7 +55,6 @@ pub(crate) fn e2m1_to_f32(nibble: u8) -> f32 {
 ///
 /// `prefix` is the tensor name without `.weight_packed` / `.weight_scale`,
 /// e.g. `model.layers.5.mlp.experts.0.gate_proj`.
-#[allow(dead_code)]
 pub(crate) fn dequant_mxfp4_to_bf16(
     store: &WeightStore,
     prefix: &str,
