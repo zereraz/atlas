@@ -3,12 +3,14 @@
 //! Per-model-family JSON parsers, split out of `config.rs` for file-size
 //! budget.
 
+mod bailing;
 mod gemma4;
 mod minimax;
 mod mistral;
 mod quantization;
 mod vision;
 
+pub(crate) use bailing::parse_bailing_hybrid;
 pub(crate) use gemma4::parse_gemma4_params;
 pub(crate) use minimax::parse_minimax_m2;
 pub use mistral::parse_mistral_params;
