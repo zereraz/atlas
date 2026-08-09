@@ -416,7 +416,7 @@ fn build_full_attention_bailing(
     gpu.copy_d2d(w_uv_ptr, w_uv_block_diag_ptr, n_kv * kv_lora * v_dim * bf16)?;
 
     // ── Output projection + gating ─────────────────────────────────────────
-    let wo_nvfp4 = Some(quantize_to_nvfp4(
+    let wo_nvfp4 = quantize_to_nvfp4(
         &o_dense,
         h,
         n_heads * v_dim,
@@ -424,7 +424,7 @@ fn build_full_attention_bailing(
         absmax_k,
         quantize_k,
         stream,
-    )?);
+    )?;
 
     let attn = AttentionWeights {
         q_proj: DenseWeight {
@@ -436,7 +436,7 @@ fn build_full_attention_bailing(
         v_proj: DenseWeight {
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
-        o_proj: wo_nvfp4.unwrap(),
+        o_proj: wo_nvfp4,
         q_norm: DenseWeight {
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
