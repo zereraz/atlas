@@ -104,7 +104,7 @@ pub(crate) fn load_ssm_bailing(
     let o_norm = dense(store, &format!("{p}.o_norm.weight"))?;
 
     // Stack conv1d: q_conv + k_conv + v_conv → [3*d, 1, kernel] in Q|K|V order.
-    let conv_shape = store.get(&format!("{p}.q_conv1d.weight"))?.clone().shape;
+    let conv_shape = store.get(&format!("{p}.q_conv1d.weight"))?.shape;
     let kernel = *conv_shape.get(2).unwrap_or(&1usize);
     let d_conv = conv_shape[0] * kernel * 2; // bytes per conv row
     let conv_buf = gpu.alloc(d_conv * 3)?;
@@ -114,9 +114,9 @@ pub(crate) fn load_ssm_bailing(
     let conv1d = DenseWeight { weight: conv_buf };
 
     // Fuse q/k/v into one [qkv, h] weight.
-    let q_shape = store.get(&format!("{p}.q_proj.weight"))?.clone().shape;
-    let k_shape = store.get(&format!("{p}.k_proj.weight"))?.clone().shape;
-    let v_shape = store.get(&format!("{p}.v_proj.weight"))?.clone().shape;
+    let q_shape = &store.get(&format!("{p}.q_proj.weight"))?.shape;
+    let k_shape = &store.get(&format!("{p}.k_proj.weight"))?.shape;
+    let v_shape = &store.get(&format!("{p}.v_proj.weight"))?.shape;
     let h = q_shape[1];
     let q_rows = q_shape[0];
     let k_rows = k_shape[0];
