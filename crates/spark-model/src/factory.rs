@@ -13,8 +13,8 @@ use spark_runtime::weights::WeightStore;
 use crate::mistral_loader::MistralWeightLoader;
 use crate::weight_loader::{
     DflashConfig, Gemma4WeightLoader, MinimaxM2WeightLoader, ModelWeightLoader,
-    NemotronHWeightLoader, Qwen3VLWeightLoader, Qwen3WeightLoader, Qwen35DenseWeightLoader,
-    Qwen35WeightLoader,
+    BailingHybridWeightLoader, NemotronHWeightLoader, Qwen3VLWeightLoader, Qwen3WeightLoader,
+    Qwen35DenseWeightLoader, Qwen35WeightLoader,
 };
 
 /// DFlash speculative-decoding build arguments. `None` for non-DFlash runs;
@@ -79,6 +79,10 @@ pub fn loader_for_config(config: &ModelConfig) -> Result<Box<dyn ModelWeightLoad
         // MiniMax M2 family (M2.1 / M2.7) — full attention + 256-expert
         // sigmoid-routed MoE + 3-module MTP.
         "minimax_m2" => Ok(Box::new(MinimaxM2WeightLoader)),
+        // Ling-3.0-flash (bailing_hybrid): 35 KDA + 7 MLA + 512-expert MXFP4
+        // MoE + MTP. Architecturally a Qwen3.5 hybrid-clone — layers reuse the
+        // Qwen35 engine; embeddings/norm/lm_head differ ({model.word_embeddings}).
+        "bailing_hybrid" | "bailing_moe_v3" => Ok(Box::new(BailingHybridWeightLoader::new())),
         _ => bail!(
             "Unsupported model type: '{}' (normalized: '{}'). \
              Supported: qwen3_next, qwen3_5_moe, qwen3_5, qwen3_6_moe, qwen3_vl_moe, nemotron_h, gemma4, mistral, minimax_m2",

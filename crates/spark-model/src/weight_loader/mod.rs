@@ -19,6 +19,7 @@ mod gemma4;
 mod minimax;
 mod nemotron;
 mod qwen3;
+mod bailing;
 mod qwen35;
 mod qwen35_dense;
 mod qwen3_vl;
@@ -27,6 +28,7 @@ pub use dflash_loader::{
     DflashConfig, DflashLayerWeights, DflashSubConfig, DflashWeights, load_dflash_weights,
     store_has_dflash_weights,
 };
+pub use bailing::BailingHybridWeightLoader;
 pub use gemma4::Gemma4WeightLoader;
 pub use minimax::MinimaxM2WeightLoader;
 pub use nemotron::NemotronHWeightLoader;
