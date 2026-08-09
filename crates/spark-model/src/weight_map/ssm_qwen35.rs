@@ -66,6 +66,84 @@ pub(crate) fn load_ssm_qwen35(
     })
 }
 
+/// Load KDA (KimiDeltaAttention) weights for Ling-3.0-flash.
+///
+/// Ling's tensor naming differs from Qwen3.5's GDN; this assembles the same
+/// `SsmWeightsQwen35` structure from Ling's `{lp}.attention.*` names:
+///
+///   q_proj/k_proj/v_proj  → in_proj_qkv ([(qk+kv+vv), h] after concat)
+///   f_proj (hidden→proj) → in_proj_b (gate; `no_kda_lora=true` → 1 matrix)
+///   g_proj (hidden→proj) → in_proj_z (output gate; Qwen3.5 z)
+///   b_proj (hidden→heads) → in_proj_a (beta)
+///   q_conv1d/k_conv1d/v_conv1d → stacked conv1d [d, 1, kernel]
+///   o_proj → out_proj
+///
+/// Ling's conv weights are 3 separate 1D kernels: fuse into Q|K|V order.
+pub(crate) fn load_ssm_bailing(
+    store: &WeightStore,
+    layer_prefix: &str,
+    gpu: &dyn GpuBackend,
+    _variant: Nvfp4Variant,
+) -> Result<SsmWeightsQwen35> {
+    let p = format!("{layer_prefix}.attention");
+
+    // Ling's in_proj tensors are all BF16 (in modules_to_not_convert).
+    let qkv_combined = {
+        let q_ptr = dense(store, &format!("{p}.q_proj.weight"))?;
+        let k_ptr = dense(store, &format!("{p}.k_proj.weight"))?;
+        let v_ptr = dense(store, &format!("{p}.v_proj.weight"))?;
+        (q_ptr, k_ptr, v_ptr)
+    };
+    let k_conv = dense(store, &format!("{p}.k_conv1d.weight"))?;
+    let q_conv = dense(store, &format!("{p}.q_conv1d.weight"))?;
+    let v_conv = dense(store, &format!("{p}.v_conv1d.weight"))?;
+    let f_proj = dense(store, &format!("{p}.f_proj.weight"))?;
+    let g_proj = dense(store, &format!("{p}.g_proj.weight"))?;
+    let b_proj = dense(store, &format!("{p}.b_proj.weight"))?;
+    let o_proj = dense(store, &format!("{p}.o_proj.weight"))?;
+    let o_norm = dense(store, &format!("{p}.o_norm.weight"))?;
+
+    // Stack conv1d: q_conv + k_conv + v_conv → [3*d, 1, kernel] in Q|K|V order.
+    let conv_shape = store.get(&format!("{p}.q_conv1d.weight"))?.clone().shape;
+    let kernel = *conv_shape.get(2).unwrap_or(&1usize);
+    let d_conv = conv_shape[0] * kernel * 2; // bytes per conv row
+    let conv_buf = gpu.alloc(d_conv * 3)?;
+    gpu.copy_d2d(q_conv.weight, conv_buf, d_conv)?;
+    gpu.copy_d2d(k_conv.weight, conv_buf.offset(d_conv), d_conv)?;
+    gpu.copy_d2d(v_conv.weight, conv_buf.offset(d_conv * 2), d_conv)?;
+    let conv1d = DenseWeight { weight: conv_buf };
+
+    // Fuse q/k/v into one [qkv, h] weight.
+    let q_shape = store.get(&format!("{p}.q_proj.weight"))?.clone().shape;
+    let k_shape = store.get(&format!("{p}.k_proj.weight"))?.clone().shape;
+    let v_shape = store.get(&format!("{p}.v_proj.weight"))?.clone().shape;
+    let h = q_shape[1];
+    let q_rows = q_shape[0];
+    let k_rows = k_shape[0];
+    let v_rows = v_shape[0];
+    let qkv_buf = gpu.alloc((q_rows + k_rows + v_rows) * h)?;
+    gpu.copy_d2d(qkv_combined.0.weight, qkv_buf, q_rows * h)?;
+    gpu.copy_d2d(qkv_combined.1.weight, qkv_buf.offset(q_rows * h), k_rows * h)?;
+    gpu.copy_d2d(
+        qkv_combined.2.weight,
+        qkv_buf.offset((q_rows + k_rows) * h),
+        v_rows * h,
+    )?;
+    let in_proj_qkv = DenseWeight { weight: qkv_buf };
+
+    Ok(SsmWeightsQwen35 {
+        in_proj_qkv,
+        in_proj_z: g_proj,
+        in_proj_a: b_proj,
+        in_proj_b: f_proj,
+        conv1d,
+        a_log: dense_keep_f32(store, &format!("{p}.A_log"), gpu)?,
+        dt_bias: dense_keep_f32(store, &format!("{p}.dt_bias"), gpu)?,
+        norm: o_norm,
+        out_proj: o_proj,
+    })
+}
+
 /// Load MoE weights for Qwen3.5, auto-selecting NVFP4 naming convention.
 ///
 /// Under EP (ep_world_size > 1), only local experts are loaded from the store.
