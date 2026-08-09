@@ -26,6 +26,11 @@ use spark_runtime::weights::{WeightDtype, WeightStore};
 
 use super::fp8_lut::fp8_e4m3_to_f32;
 
+// Phase B scaffold: `dequant_mxfp4_to_bf16` is exercised by unit tests and will
+// be called by the `bailing` weight loader (next commit). Allow dead code until
+// the loader lands so `#![deny(warnings)]` doesn't gate the primitive merge.
+#[allow(dead_code)]
+
 /// f32 → BF16 (little-endian 2-byte), truncating the low 16 bits.
 #[inline]
 pub(crate) fn bf16_bytes_from_f32(v: f32) -> [u8; 2] {
@@ -36,6 +41,7 @@ pub(crate) fn bf16_bytes_from_f32(v: f32) -> [u8; 2] {
 
 /// MXFP4 block-scaling group size for Ling-3.0-flash (compressed-tensors
 /// `group_size` under `quantization_config.config_groups.group_0.weights`).
+#[allow(dead_code)]
 pub const MXFP4_GROUP_SIZE: usize = 32;
 
 /// e2m1 (4-bit float) → f32. Table-driven: 8 magnitude codes (3-bit) × sign.
