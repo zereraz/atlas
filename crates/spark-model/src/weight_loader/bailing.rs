@@ -267,15 +267,15 @@ fn build_full_attention_bailing(
     gpu: &dyn GpuBackend,
     variant: crate::weight_map::Nvfp4Variant,
     config: &ModelConfig,
-    layer_kv_dtype: crate::kv_cache::KvCacheDtype,
+    layer_kv_dtype: spark_runtime::kv_cache::KvCacheDtype,
     attn_idx: usize,
     input_norm: DenseWeight,
     post_attn_norm: DenseWeight,
     ffn: FfnComponent,
 ) -> Result<Box<dyn TransformerLayer>> {
     use crate::layers::qwen3_attention::MlaWeights;
-    use crate::layers::{FfnComponent, Qwen3AttentionLayer};
-    use crate::weight_map::{AttentionWeights, dense};
+    use crate::layers::Qwen3AttentionLayer;
+    use crate::weight_map::AttentionWeights;
 
     let p = format!("{lp}.attention");
     let h = config.hidden_size;
