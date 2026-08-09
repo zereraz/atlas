@@ -1,0 +1,4 @@
+[kernel]
+# Ling-3.0-flash MXFP4 shares `kernels/gb10/common/` (GDN, MLA, MoE, etc.).
+# Any model-specific tuning would live here as extra nvcc flags.
+# Currently empty: default kernel selection is correct.

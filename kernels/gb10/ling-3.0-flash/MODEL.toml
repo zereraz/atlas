@@ -1,0 +1,62 @@
+[model]
+name = "ling-3.0-flash"
+hf_id = "inclusionAI/Ling-3.0-flash-MXFP4"
+params = "124B"
+active_params = "5B"
+architecture = "KDA + MLA + MoE + MTP"
+
+layers_total = 42
+layers_linear_attention = 35
+layers_full_attention = 7
+layer_pattern = "6:1 (5× KDA, 1× MLA), every 6th layer is full attention"
+
+moe_experts = 512
+moe_topk = 8
+moe_shared = 1
+moe_intermediate = 768
+shared_expert_intermediate = 768
+moe_routing = "sigmoid + expert_bias"
+moe_n_group = 8
+moe_topk_group = 4
+moe_routed_scaling_factor = 2.5
+norm_topk_prob = true
+
+hidden_dim = 2560
+head_dim = 128
+q_heads = 32
+kv_heads = 32
+
+linear_attn_key_heads = 32
+linear_attn_key_dim = 128
+linear_attn_value_heads = 32
+linear_attn_value_dim = 128
+linear_conv_kernel = 4
+linear_kda_no_lora = true
+linear_kda_safe_gate = true
+linear_kda_lower_bound = -5.0
+
+mla_kv_lora_rank = 512
+mla_qk_rope_head_dim = 64
+mla_qk_nope_head_dim = 128
+mla_v_head_dim = 128
+
+vocab_size = 157184
+max_position_embeddings = 131072
+rope_theta = 60000000
+partial_rotary_factor = 0.5
+attn_output_gate = true
+
+mtp_layers = 1
+mtp_type = "full_attention"
+
+# Effective context for 124B MoE at 128K positional budget (GPU-KV-limited).
+effective_context = 32768
+
+[kernel]
+# Ling uses the shared `kernels/gb10/common/` kernel set (RMS norm, GDN,
+# MoE top-k sigmoid, attention, embed). This quant dir is a thin overlay
+# for any Ling-specific tuning knobs.
+
+[[model_types]]
+model_type = "bailing_hybrid"
+hidden_size = 2560
