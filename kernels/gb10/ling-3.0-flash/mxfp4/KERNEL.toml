@@ -1,4 +1,31 @@
-[kernel]
-# Ling-3.0-flash MXFP4 shares `kernels/gb10/common/` (GDN, MLA, MoE, etc.).
-# Any model-specific tuning would live here as extra nvcc flags.
-# Currently empty: default kernel selection is correct.
+[build]
+extra_nvcc_flags = ["--fmad=false"]
+
+# File stem → module name overrides (mirror of kernels/gb10/common/KERNEL.toml;
+# every model KERNEL.toml must carry the full list because model-specific
+# KERNEL.toml entirely overrides common's modules map).
+[modules]
+e2m1_branchless = "e2m1"
+moe_permute = "moe"
+dense_gemm_bf16 = "gemm"
+dense_gemm_splitk = "gemm_splitk"
+dense_gemm_tc = "gemm_tc"
+rms_norm = "norm"
+argmax_bf16 = "argmax"
+dense_gemv_bf16 = "gemv"
+dense_gemv_fp8w = "gemv_fp8w"
+moe_shared_expert_fused_batch2 = "moe_fused_batch2"
+quantize_bf16_to_nvfp4 = "quantize_nvfp4"
+paged_decode_attn = "paged_decode"
+paged_decode_attn_fp8 = "paged_decode_fp8"
+paged_decode_attn_nvfp4 = "paged_decode_nvfp4"
+w4a16_gemm = "w4a16"
+kv_cache_append = "kv_cache"
+moe_w4a16_grouped_gemm = "moe_w4a16"
+moe_sorted_prefill = "moe_sorted"
+moe_shared_expert_fused_batch3 = "moe_fused_batch3"
+inferspark_prefill_paged = "prefill_paged"
+inferspark_prefill_paged_fp8 = "prefill_paged_fp8"
+inferspark_prefill_paged_nvfp4 = "prefill_paged_nvfp4"
+inferspark_prefill_fp8kv = "prefill_fp8kv"
+nemotron_moe_prefill = "nemotron_moe_prefill"
