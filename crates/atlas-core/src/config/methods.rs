@@ -97,12 +97,7 @@ impl ModelConfig {
     /// SSM beta+alpha projection output size.
     pub fn ssm_ba_size(&self) -> usize {
         // beta: num_value_heads, alpha: num_value_heads
-        let kda_ba = self.linear_num_value_heads * 2;
-        // The MLA-absorbed prefill (mistral/Ling) uses `ssm_ba` as its
-        // `q_latent` scratch — that needs to fit `q_lora` per token, which
-        // for direct-Q models (Ling-3.0-flash, no q-latent compression)
-        // is `hidden_size` itself. Size it for the larger of the two uses.
-        kda_ba.max(self.q_lora_rank).max(self.hidden_size)
+        self.linear_num_value_heads * 2
     }
 
     /// Range of expert indices local to this EP rank.
