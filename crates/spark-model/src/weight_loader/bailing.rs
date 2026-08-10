@@ -100,6 +100,27 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
                 let moe_layer = MoeLayer::new(
                     moe_weights, config.num_experts, Some(gate_nvfp4), gpu, config,
                 )?;
+                if variant == crate::weight_map::Nvfp4Variant::Mxfp4Dequanted {
+                    // MXFP4 runtime requantization duplicates the on-disk
+                    // packed experts (raw packed+scale still in the store)
+                    // and the requantized NVFP4 copies (in the layer).
+                    // Free the raw GPU buffers of this layer's experts — the
+                    // WeightStore names remain but never get touched again.
+                    let prefix = format!("{lp}.mlp.experts.");
+                    let names: Vec<String> = store
+                        .names()
+                        .filter(|n| n.starts_with(&prefix))
+                        .map(String::from)
+                        .collect();
+                    let mut freed: usize = 0;
+                    for name in &names {
+                        if let Ok(t) = store.get(name) {
+                            gpu.free(t.ptr)?;
+                            freed += t.byte_size();
+                        }
+                    }
+                    tracing::warn!("Ling[{i}]: freed {freed} bytes raw MXFP4 for {} tensors", names.len());
+                }
                 FfnComponent::Moe(moe_layer)
             };
 

@@ -128,6 +128,14 @@ impl WeightStore {
         self.weights.values().map(|w| w.byte_size()).sum()
     }
 
+    /// Remove a tensor from the store, returning the previously held tensor.
+    /// Used by loaders that transform a raw on-disk weight into a different
+    /// GPU representation (e.g. MXFP4 → NVFP4 runtime re-quantization on
+    /// Ling) to release the no-longer-needed packed source memory.
+    pub fn remove(&mut self, name: &str) -> Option<WeightTensor> {
+        self.weights.remove(name)
+    }
+
     /// Check if any tensor has FP8 dtype.
     pub fn has_fp8_weights(&self) -> bool {
         self.weights
