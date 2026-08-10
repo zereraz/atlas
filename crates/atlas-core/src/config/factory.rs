@@ -64,6 +64,7 @@ impl ModelConfig {
             norm_eps: 0.0,
             conv_kernel: 0,
             moe_shared_expert_intermediate_size: 0,
+            first_k_dense_replace: 0,
             routed_scaling_factor: 1.0,
             moe_latent_size: 0,
             vision: None,
