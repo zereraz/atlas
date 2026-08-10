@@ -560,6 +560,10 @@ fn build_full_attention_bailing(
         config,
     )?;
     layer.set_mla_weights(mla);
+    // Ling's MLA heads are composite (128 nope + 64 rope = 192) while the
+    // KDA sibling layers use true head_dim=128. Force the MLA prefill path
+    // to see the right full head dimension and per-KV-group shape.
+    layer.set_dimension_overrides(config.qk_nope_head_dim + config.qk_rope_head_dim, n_heads, n_kv);
     let _ = g_proj; // output gate lives on the MLA forward path
 
     Ok(Box::new(layer))
