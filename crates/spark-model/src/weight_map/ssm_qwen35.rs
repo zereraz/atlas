@@ -280,7 +280,7 @@ pub(crate) fn load_moe_qwen35(
         }
     };
 
-    let shared_expert = load_expert(&format!("{p}.shared_expert"))?;
+    let shared_expert = load_expert(&format!("{p}.shared_experts"))?;
 
     let mut experts = Vec::with_capacity(num_experts);
     for e in 0..num_experts {
@@ -542,7 +542,23 @@ pub(crate) fn load_moe_bailing(
         }
     };
 
-    let shared_expert = load_expert(&format!("{p}.shared_experts"))?;
+    // Ling's shared expert is BF16 (`shared_experts.*.weight`, in the
+    // modules_to_not_convert ignore list) — never quantized. Load as dense and
+    // runtime-quantize regardless of `variant`.
+    let shared_expert = {
+        let sp = format!("{p}.shared_experts");
+        let bf16 = |name: &str, n: usize, k: usize| -> Result<QuantizedWeight> {
+            let d = dense(store, &format!("{sp}.{name}.weight"))?;
+            let q = quantize_to_nvfp4(&d, n, k, gpu, absmax_k, quantize_k, stream)?;
+            gpu.free(d.weight)?;
+            Ok(q)
+        };
+        ExpertWeight {
+            gate_proj: bf16("gate_proj", inter, h)?,
+            up_proj: bf16("up_proj", inter, h)?,
+            down_proj: bf16("down_proj", h, inter)?,
+        }
+    };
 
     let mut experts = Vec::with_capacity(num_experts);
     for e in 0..num_experts {
@@ -553,7 +569,7 @@ pub(crate) fn load_moe_bailing(
         }
     }
 
-    // Ling uses a per-layer `gate.expert_bias` (loss-free routing).
+    // Ling _uses a per-layer `gate.expert_bias` (loss-free routing).
     let correction_bias = if store.contains(&format!("{p}.gate.expert_bias")) {
         Some(dense(store, &format!("{p}.gate.expert_bias"))?)
     } else if config.use_routing_bias {
