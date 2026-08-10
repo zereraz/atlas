@@ -58,6 +58,18 @@ impl Qwen3AttentionLayer {
             .as_ref()
             .expect("prefill_attention_paged_mla called without MLA config");
 
+        // Temporary sync checkpoints for diagnosing which MLA kernel writes
+        // out-of-bounds under Ling dims. Set ATLAS_MLA_SYNC=1 to activate.
+        let sync_dbg = std::env::var("ATLAS_MLA_SYNC").ok().as_deref() == Some("1");
+        macro_rules! sync {
+            ($label:expr) => {
+                if sync_dbg {
+                    ctx.gpu.synchronize(stream)?;
+                    tracing::debug!("[MLA_SYNC] post-{}", $label);
+                }
+            };
+        }
+
         let q_lora = mla.q_lora_rank as u32;
         let kv_lora = mla.kv_lora_rank as u32;
         let mla_nope = mla.nope as u32;
@@ -77,6 +89,7 @@ impl Qwen3AttentionLayer {
             h,
             stream,
         )?;
+        sync!("dense_gemm");
         ops::rms_norm(
             ctx.gpu,
             self.rms_norm_k,
@@ -88,6 +101,7 @@ impl Qwen3AttentionLayer {
             eps,
             stream,
         )?;
+        sync!("rms_norm");
         let qg_out = ctx.buffers.qkv_output();
         ops::dense_gemm(
             ctx.gpu,
@@ -100,6 +114,7 @@ impl Qwen3AttentionLayer {
             q_lora,
             stream,
         )?;
+        sync!("dense_gemm");
 
         // KV: latent → norm → expand
         let kv_latent = ctx.buffers.expert_gate_out();
@@ -114,6 +129,7 @@ impl Qwen3AttentionLayer {
             h,
             stream,
         )?;
+        sync!("dense_gemm");
         ops::rms_norm(
             ctx.gpu,
             self.rms_norm_k,
@@ -125,6 +141,7 @@ impl Qwen3AttentionLayer {
             eps,
             stream,
         )?;
+        sync!("rms_norm");
         let kv_expanded_dim = nkv * (mla_nope + mla_v_dim);
         let kv_expanded = ctx.buffers.ssm_deinterleaved();
         ops::dense_gemm(
@@ -138,6 +155,7 @@ impl Qwen3AttentionLayer {
             kv_lora,
             stream,
         )?;
+        sync!("dense_gemm");
 
         // K_rope: single shared head [N, rope=64] (MQA-style)
         let k_rope_buf = ctx.buffers.ssm_ba();
@@ -152,6 +170,7 @@ impl Qwen3AttentionLayer {
             h,
             stream,
         )?;
+        sync!("dense_gemm");
 
         // Apply RoPE to Q rope portions and K_rope BEFORE assembly
         let q_rope_tmp = ctx.buffers.ssm_conv_out_f32();
@@ -168,6 +187,7 @@ impl Qwen3AttentionLayer {
             nq * hd,
             stream,
         )?;
+        sync!("mla_q_rope_extract_batched");
         let rope_meta = ctx.attn_metadata.expect("MLA prefill requires metadata");
         ops::rope_yarn(
             ctx.gpu,
@@ -184,6 +204,7 @@ impl Qwen3AttentionLayer {
             ctx.config.rope_theta as f32,
             stream,
         )?;
+        sync!("rope_yarn");
         ops::mla_q_rope_writeback_batched(
             ctx.gpu,
             self.mla_q_rope_writeback_batched_k,
@@ -197,6 +218,7 @@ impl Qwen3AttentionLayer {
             nq * hd,
             stream,
         )?;
+        sync!("mla_q_rope_writeback_batched");
 
         // Assemble K=[nope|rope] and extract V (1 kernel vs N*nkv*3 copies)
         let k_contiguous = ctx.buffers.ssm_qkvz();
@@ -217,6 +239,7 @@ impl Qwen3AttentionLayer {
             nkv * (mla_nope + mla_v_dim),
             stream,
         )?;
+        sync!("mla_kv_assemble_batched");
 
         // Write compressed MLA cache
         let mla_cache_dim = kv_lora + mla_rope;
@@ -235,6 +258,7 @@ impl Qwen3AttentionLayer {
             mla_cache_dim,
             stream,
         )?;
+        sync!("mla_cache_assemble_batched");
         let meta = ctx.attn_metadata.expect("MLA prefill requires slot info");
         self.write_kv_cache(
             ctx.gpu,
@@ -277,6 +301,7 @@ impl Qwen3AttentionLayer {
             self.sliding_window.unwrap_or(0),
             stream,
         )?;
+        sync!("prefill_attention");
 
         // O projection: [N, nq*hd] → [N, H]
         let o_out = ctx.buffers.norm_output();
@@ -292,6 +317,7 @@ impl Qwen3AttentionLayer {
                 nq * hd,
                 stream,
             )?;
+        sync!("w4a16_gemm");
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -304,6 +330,7 @@ impl Qwen3AttentionLayer {
                 nq * hd,
                 stream,
             )?;
+        sync!("dense_gemm");
         }
         Ok(o_out)
     }

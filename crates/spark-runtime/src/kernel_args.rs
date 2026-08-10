@@ -173,14 +173,21 @@ impl<'a> KernelLaunch<'a> {
                 args.push(KernelArg::Bytes(bytes));
             }
         }
-        self.gpu.launch_typed(
+        let result = self.gpu.launch_typed(
             self.kernel,
             self.grid,
             self.block,
             self.shared_mem,
             stream,
             &args,
-        )
+        );
+        if result.is_err() && std::env::var("ATLAS_LAUNCH_BACKTRACE").ok().as_deref() == Some("1") {
+            eprintln!(
+                "[KernelLaunch] FAILED kernel={} grid={:?} block={:?} → {:?}",
+                self.kernel.0, self.grid, self.block, result
+            );
+        }
+        result
     }
 }
 
