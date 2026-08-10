@@ -121,13 +121,19 @@ pub(crate) fn load_ssm_bailing(
     let q_rows = q_shape[0];
     let k_rows = k_shape[0];
     let v_rows = v_shape[0];
-    let qkv_buf = gpu.alloc((q_rows + k_rows + v_rows) * h)?;
-    gpu.copy_d2d(qkv_combined.0.weight, qkv_buf, q_rows * h)?;
-    gpu.copy_d2d(qkv_combined.1.weight, qkv_buf.offset(q_rows * h), k_rows * h)?;
+    // BF16 = 2 bytes per element: allocation and copy lengths must be in bytes.
+    let bf16 = 2usize;
+    let qkv_buf = gpu.alloc((q_rows + k_rows + v_rows) * h * bf16)?;
+    gpu.copy_d2d(qkv_combined.0.weight, qkv_buf, q_rows * h * bf16)?;
+    gpu.copy_d2d(
+        qkv_combined.1.weight,
+        qkv_buf.offset(q_rows * h * bf16),
+        k_rows * h * bf16,
+    )?;
     gpu.copy_d2d(
         qkv_combined.2.weight,
-        qkv_buf.offset((q_rows + k_rows) * h),
-        v_rows * h,
+        qkv_buf.offset((q_rows + k_rows) * h * bf16),
+        v_rows * h * bf16,
     )?;
     let in_proj_qkv = DenseWeight { weight: qkv_buf };
 
