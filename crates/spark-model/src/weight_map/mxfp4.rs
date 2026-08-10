@@ -68,9 +68,11 @@ pub(crate) fn dequant_mxfp4_to_bf16(
         "Expected UInt8 (packed e2m1) for {prefix}.weight_packed, got {:?}",
         packed.dtype
     );
+    // MXFP4 e4m3 scales are commonly serialized as raw UInt8 bytes
+    // (compressed-tensors mxfp4-pack-quantized) — accept either FP8E4M3 or U8.
     ensure!(
-        scale.dtype == WeightDtype::FP8E4M3,
-        "Expected FP8E4M3 for {prefix}.weight_scale, got {:?}",
+        matches!(scale.dtype, WeightDtype::FP8E4M3 | WeightDtype::UInt8),
+        "Expected FP8E4M3 or UInt8 for {prefix}.weight_scale, got {:?}",
         scale.dtype
     );
     ensure!(
