@@ -17,10 +17,11 @@ use spark_runtime::weights::WeightStore;
 
 use super::ModelWeightLoader;
 use crate::layer::TransformerLayer;
-use crate::layers::{FfnComponent, MoeLayer, Qwen3SsmLayer};
+use crate::layers::{DenseFfnLayer, FfnComponent, MoeLayer, Qwen3SsmLayer};
 use crate::weight_map::{
     DenseWeight, MtpWeights, SsmWeights, dense, detect_nvfp4_variant, gpu_concat_rows,
-    interleave_ba, load_moe_bailing, load_mtp, load_ssm_bailing, quantize_to_nvfp4,
+    interleave_ba, load_dense_ffn, load_moe_bailing, load_mtp, load_ssm_bailing,
+    quantize_to_nvfp4,
 };
 
 /// Ling-3.0-flash (bailing_hybrid).
@@ -73,22 +74,33 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
             let input_norm = dense(store, &format!("{lp}.input_layernorm.weight"))?;
             let post_attn_norm = dense(store, &format!("{lp}.post_attention_layernorm.weight"))?;
 
-            let moe_weights = load_moe_bailing(
-                store, &lp, config.num_experts, gpu, config, variant, absmax_k, quantize_k, stream,
-                false,
-            )?;
-            let gate_nvfp4 = quantize_to_nvfp4(
-                &moe_weights.gate,
-                config.num_experts,
-                h,
-                gpu,
-                absmax_k,
-                quantize_k,
-                stream,
-            )?;
-            let moe_layer =
-                MoeLayer::new(moe_weights, config.num_experts, Some(gate_nvfp4), gpu, config)?;
-            let ffn = FfnComponent::Moe(moe_layer);
+            // Ling: layers < first_k_dense_replace (=2) use a dense SwiGLU FFN
+            // (`mlp.gate_proj/up_proj/down_proj`, BF16 in ignore list), the rest
+            // are the 512-expert sparse MoE block.
+            let ffn: FfnComponent = if i < config.first_k_dense_replace {
+                let dw = load_dense_ffn(
+                    store, &lp, gpu, variant, absmax_k, quantize_k, stream, config,
+                )?;
+                FfnComponent::Dense(DenseFfnLayer::new(dw, gpu)?)
+            } else {
+                let moe_weights = load_moe_bailing(
+                    store, &lp, config.num_experts, gpu, config, variant, absmax_k,
+                    quantize_k, stream, false,
+                )?;
+                let gate_nvfp4 = quantize_to_nvfp4(
+                    &moe_weights.gate,
+                    config.num_experts,
+                    h,
+                    gpu,
+                    absmax_k,
+                    quantize_k,
+                    stream,
+                )?;
+                let moe_layer = MoeLayer::new(
+                    moe_weights, config.num_experts, Some(gate_nvfp4), gpu, config,
+                )?;
+                FfnComponent::Moe(moe_layer)
+            };
 
             match lt {
                 LayerType::FullAttention => {

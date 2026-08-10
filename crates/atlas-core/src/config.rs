@@ -154,6 +154,10 @@ pub struct ModelConfig {
     /// Nemotron-H shared expert intermediate (mapped to shared_expert_intermediate_size).
     #[serde(default)]
     pub moe_shared_expert_intermediate_size: usize,
+    /// First N layers use a dense FFN instead of the MoE block (Ling-3.0,
+    /// Qwen1.5-MoE, ...). 0 = all layers MoE.
+    #[serde(default)]
+    pub first_k_dense_replace: usize,
     /// Nemotron-H routed scaling factor for expert outputs.
     #[serde(default = "default_one_f64")]
     pub routed_scaling_factor: f64,

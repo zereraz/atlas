@@ -210,9 +210,30 @@ pub(crate) fn load_dense_ffn(
             })
         }
         _ => {
-            let gate = quantized_auto(store, &format!("{prefix}.mlp.gate_proj"), gpu, variant)?;
-            let up = quantized_auto(store, &format!("{prefix}.mlp.up_proj"), gpu, variant)?;
-            let down = quantized_auto(store, &format!("{prefix}.mlp.down_proj"), gpu, variant)?;
+            // Use quantized_any (dimension-aware) so Mxfp4Dequanted/Bf16Raw
+            // BF16 ignore-list weights get runtime-quantized. Dimensions are
+            // only needed for the runtime-quantize branch; pass config-derived
+            // values via the helper.
+            let inter = if config.intermediate_size > 0 {
+                config.intermediate_size
+            } else {
+                config.moe_intermediate_size
+            };
+            let h = config.hidden_size;
+            let qctx = QuantizeCtx {
+                absmax_k,
+                quantize_k,
+                stream,
+            };
+            let gate = quantized_any(
+                store, &format!("{prefix}.mlp.gate_proj"), inter, h, gpu, variant, qctx,
+            )?;
+            let up = quantized_any(
+                store, &format!("{prefix}.mlp.up_proj"), inter, h, gpu, variant, qctx,
+            )?;
+            let down = quantized_any(
+                store, &format!("{prefix}.mlp.down_proj"), h, inter, gpu, variant, qctx,
+            )?;
             Ok(DenseFfnWeights {
                 gate_proj: gate,
                 up_proj: up,
