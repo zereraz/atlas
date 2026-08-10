@@ -9,7 +9,7 @@
 //!
 //! Ling runs TP=1 on spark in v1 → `supports_tp() = false`.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use atlas_core::config::{LayerType, ModelConfig};
 use spark_runtime::gpu::GpuBackend;
 use spark_runtime::kv_cache::KvCacheDtype;
@@ -332,7 +332,7 @@ fn build_full_attention_bailing(
         gpu.copy_h2d(&eye, wq_a_dense)?;
     }
     let wq_b_dense = q_proj; // [6144, 2560] direct
-    tracing::warn!("Ling[{_i}] MLA step B: kv_a split done")
+    tracing::warn!("Ling[{_i}] MLA step B: kv_a split done");
 
     // ── kv_a split: latent[0..512] + rope[512..576] ─────────────────────────
     let wkv_a_dense = DenseWeight {
