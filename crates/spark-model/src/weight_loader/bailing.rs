@@ -71,6 +71,7 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
 
         for (i, lt) in layer_types.iter().enumerate() {
             let lp = config.layer_prefix(i);
+            tracing::warn!("Ling[{i}] build start (type={lt:?})");
             let input_norm = dense(store, &format!("{lp}.input_layernorm.weight"))?;
             let post_attn_norm = dense(store, &format!("{lp}.post_attention_layernorm.weight"))?;
 
