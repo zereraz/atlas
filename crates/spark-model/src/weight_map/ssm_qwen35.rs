@@ -542,7 +542,7 @@ pub(crate) fn load_moe_bailing(
         }
     };
 
-    let shared_expert = load_expert(&format!("{p}.shared_expert"))?;
+    let shared_expert = load_expert(&format!("{p}.shared_experts"))?;
 
     let mut experts = Vec::with_capacity(num_experts);
     for e in 0..num_experts {
