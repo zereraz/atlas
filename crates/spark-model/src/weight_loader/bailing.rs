@@ -416,7 +416,9 @@ fn build_full_attention_bailing(
     gpu.copy_h2d(&wqk_bf16, wqk_ptr)?;
     tracing::warn!("Ling[{_i}] MLA step E: w_qk_absorbed uploaded");
 
-    // wq_b_rope: rows [n*hd+nope .. n*hd+q_lora] (rope portion only)
+    // wq_b_rope: rows [n*hd+nope .. n*hd+hd] (the rope sub-rows of q_proj),
+    // ONE source row (width h) copied per (head, rope-slot). Copy length must
+    // be h*bf16 (one row), not rope*h*bf16.
     let wqbr_size = n_heads * rope * h * bf16;
     let wqbr_ptr = gpu_alloc_or_managed(wqbr_size)?;
     for head in 0..n_heads {
@@ -424,9 +426,15 @@ fn build_full_attention_bailing(
             let src_row = head * hd + nope + r;
             let src = wq_b_dense.weight.offset(src_row * h * bf16);
             let dst = wqbr_ptr.offset((head * rope + r) * h * bf16);
-            gpu.copy_d2d(src, dst, rope * h * bf16)?;
+            gpu.copy_d2d(src, dst, h * bf16)
+                .with_context(|| format!(
+                    "Ling[{_i}] wq_b_rope copy head={head} r={r} dst_off={} len={}",
+                    (head * rope + r) * h * bf16,
+                    h * bf16
+                ))?;
         }
     }
+    tracing::warn!("Ling[{_i}] MLA step E2: wq_b_rope copied");
 
     // Block-diagonal W_UK for prefill: same as w_uk_t (single block).
     let w_uk_block_diag_ptr = gpu_alloc_or_managed(n_kv * w_uk_per_head)?;
