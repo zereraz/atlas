@@ -174,20 +174,43 @@ impl MoeLayer {
         let indices_dev = scratch;
         let weights_dev = scratch.offset(total_expanded as usize * 4);
         if let Some(bias) = self.correction_bias_dev {
-            ops::moe_topk_sigmoid_batched(
-                ctx.gpu,
-                self.moe_topk_sigmoid_batched_k,
-                gate_logits,
-                bias,
-                indices_dev,
-                weights_dev,
-                num_experts,
-                top_k,
-                ctx.config.norm_topk_prob,
-                1.0,
-                n,
-                stream,
-            )?;
+            if self.moe_topk_sigmoid_batched_k.0 != 0 {
+                ops::moe_topk_sigmoid_batched(
+                    ctx.gpu,
+                    self.moe_topk_sigmoid_batched_k,
+                    gate_logits,
+                    bias,
+                    indices_dev,
+                    weights_dev,
+                    num_experts,
+                    top_k,
+                    ctx.config.norm_topk_prob,
+                    1.0,
+                    n,
+                    stream,
+                )?;
+            } else {
+                // Batched sigmoid kernel not compiled for this target —
+                // per-token fallback via the (mandatory) sigmoid kernel.
+                tracing::debug!(
+                    "moe_topk_sigmoid_batched not loaded; falling back to per-token"
+                );
+                for tok in 0..n as usize {
+                    ops::moe_topk_sigmoid(
+                        ctx.gpu,
+                        self.moe_topk_sigmoid_k,
+                        gate_logits.offset(tok * num_experts as usize * 4),
+                        bias,
+                        indices_dev.offset(tok * top_k as usize * 4),
+                        weights_dev.offset(tok * top_k as usize * 4),
+                        num_experts,
+                        top_k,
+                        ctx.config.norm_topk_prob,
+                        1.0,
+                        stream,
+                    )?;
+                }
+            }
         } else {
             ops::moe_topk_softmax_batched(
                 ctx.gpu,
