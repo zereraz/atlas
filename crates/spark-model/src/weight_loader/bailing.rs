@@ -511,15 +511,7 @@ fn build_full_attention_bailing(
 
     let mla = MlaWeights {
         wq_a: DenseWeight { weight: wq_a_dense },
-        wq_a_nvfp4: Some(quantize_to_nvfp4(
-            &DenseWeight { weight: wq_a_dense },
-            h,
-            h,
-            gpu,
-            absmax_k,
-            quantize_k,
-            stream,
-        )?),
+        wq_a_nvfp4: None,
         wq_b: wq_b_dense,
         wq_b_nvfp4: Some(quantize_to_nvfp4(&wq_b_dense, n_heads * hd, h, gpu, absmax_k, quantize_k, stream)?),
         q_a_norm: DenseWeight {
@@ -542,7 +534,6 @@ fn build_full_attention_bailing(
         wo: o_dense,
         // TEMP DEBUG: force the dense WO path while the nvfp4 wo GEMM is debugged.
         wo_nvfp4: None,
-        wq_a_nvfp4: None,
         wq_b_rope: DenseWeight { weight: wqbr_ptr },
         w_uk_t: DenseWeight { weight: w_uk_t_ptr },
         w_uv: DenseWeight { weight: w_uv_ptr },
