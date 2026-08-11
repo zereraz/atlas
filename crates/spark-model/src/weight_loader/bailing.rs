@@ -44,18 +44,7 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
         false
     }
 
-    /// Ling-3.0: MLA layers use expanded-K/V cache layout (nq=32, hd=192)
-    /// instead of compressed (nkv=1, hd=576). The first `first_k_dense_replace`
-    /// layers are KDA (linear) which don't use the attention KV pool; the
-    /// remaining layers are MLA full-attention.
-    fn kv_layer_dims(&self, config: &ModelConfig) -> Vec<(usize, usize)> {
-        let mut out: Vec<(usize, usize)> = Vec::new();
-        // num_attention_layers counts FULL-attention layers only (non-KDA).
-        for _ in 0..config.num_attention_layers() {
-            out.push((config.num_attention_heads, 192));
-        }
-        out
-    }
+
 
     fn load_layers(
         &self,
