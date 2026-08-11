@@ -342,8 +342,12 @@ impl Qwen3AttentionLayer {
         )
         .map_err(|e| anyhow::anyhow!("MLA flash_attn_64 fallback: {e}"))?;
         eprintln!("[MLA-CS] post-prefill_attention_64"); ctx.gpu.synchronize(stream)?;
-        // wo projection — output to qkv_output (norm_output aliases downstream)
+        // wo projection — output to qkv_output (norm_output aliases downstream).
+        // Ling: Q/K head_dim is the composite 192 (nope+rope) but V heads are
+        // v_dim=128 wide, so the attention output buffer is [n, nq*v_dim] and
+        // the wo GEMM's input K dim is nq*v_dim (=4096), NOT nq*hd (=6144).
         let o_out = ctx.buffers.qkv_output();
+        let wo_k = nq * mla_v_dim;
         if let Some(ref wo_nvfp4) = mla.wo_nvfp4 {
             ops::w4a16_gemm(
                 ctx.gpu,
@@ -353,7 +357,7 @@ impl Qwen3AttentionLayer {
                 o_out,
                 n,
                 h,
-                nq * hd,
+                wo_k,
                 stream,
             )?;
         eprintln!("[MLA-CS] post-w4a16_gemm"); ctx.gpu.synchronize(stream)?;
@@ -366,7 +370,7 @@ impl Qwen3AttentionLayer {
                 o_out,
                 n,
                 h,
-                nq * hd,
+                wo_k,
                 stream,
             )?;
         eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;

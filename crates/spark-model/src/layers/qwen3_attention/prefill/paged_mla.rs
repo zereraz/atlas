@@ -312,8 +312,11 @@ impl Qwen3AttentionLayer {
         )?;
         sync!("prefill_attention");
 
-        // O projection: [N, nq*hd] → [N, H]
+        // O projection: [N, nq*v_dim] → [N, H]. Ling: attention output
+        // buffer carries V-heads only (v_dim=128), so input K dim is
+        // nq*v_dim=4096, not nq*hd=6144 (composite nope+rope head).
         let o_out = ctx.buffers.norm_output();
+        let wo_k = nq * mla_v_dim;
         if let Some(ref wo_nvfp4) = mla.wo_nvfp4 {
             ops::w4a16_gemm(
                 ctx.gpu,
@@ -323,7 +326,7 @@ impl Qwen3AttentionLayer {
                 o_out,
                 n,
                 h,
-                nq * hd,
+                wo_k,
                 stream,
             )?;
         sync!("w4a16_gemm");
@@ -336,7 +339,7 @@ impl Qwen3AttentionLayer {
                 o_out,
                 n,
                 h,
-                nq * hd,
+                wo_k,
                 stream,
             )?;
         sync!("dense_gemm");
