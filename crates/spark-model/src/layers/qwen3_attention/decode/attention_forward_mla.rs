@@ -270,8 +270,11 @@ impl Qwen3AttentionLayer {
             )
         })?;
 
-        // Step 4: K_rope + RoPE + writeback
-        let k_rope_single = ctx.buffers.ssm_ba();
+        // Step 4: K_rope + RoPE + writeback.
+        // Use expert_gate_out instead of ssm_ba: ssm_ba is shared with
+        // q_latent (Ling q_lora = h = 2560), which exceeds KDA's 64-wide
+        // ssm_ba_size and overflows into downstream buffers.
+        let k_rope_single = ctx.buffers.expert_gate_out();
         prof!("k_rope+RoPE+wb", {
             ops::dense_gemv(
                 ctx.gpu,
