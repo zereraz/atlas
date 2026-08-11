@@ -540,7 +540,9 @@ fn build_full_attention_bailing(
         wkv_a_rope: DenseWeight { weight: wkv_a_rope_dense.weight },
         wkv_a_merged: DenseWeight { weight: wkv_a_dense.weight },
         wo: o_dense,
-        wo_nvfp4: Some(wo_nvfp4),
+        // TEMP DEBUG: force the dense WO path while the nvfp4 wo GEMM is debugged.
+        wo_nvfp4: None,
+        wq_a_nvfp4: None,
         wq_b_rope: DenseWeight { weight: wqbr_ptr },
         w_uk_t: DenseWeight { weight: w_uk_t_ptr },
         w_uv: DenseWeight { weight: w_uv_ptr },
