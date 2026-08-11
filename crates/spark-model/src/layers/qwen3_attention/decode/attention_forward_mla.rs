@@ -390,6 +390,8 @@ impl Qwen3AttentionLayer {
         // Step 8: Paged decode attention
         let attn_out = ctx.buffers.attn_output();
         let inv_sqrt_d = self.effective_attn_scale(hd);
+        eprintln!("[DEC-MLA] pre paged_decode_attn_bf16: paged_decode_mla_k=0x{:x}, nq={} n=1", self.paged_decode_mla_k.0, nq);
+        ctx.gpu.synchronize(stream)?;
         prof!("paged_attn", {
             ops::paged_decode_attn_bf16(
                 ctx.gpu,
