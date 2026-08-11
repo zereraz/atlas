@@ -139,9 +139,13 @@ pub(crate) fn load_ssm_bailing(
 
     Ok(SsmWeightsQwen35 {
         in_proj_qkv,
+        // Ling naming: f_proj = forget/decay (mapped to in_proj_a = alpha),
+        // b_proj = sigmoid write-gate (mapped to in_proj_b = beta). G_proj is
+        // the output Z-gate. Swapping a/b makes the exp(-A·softplus()) path
+        // explode instead of decay, which matches the L2+ norm=1e13 symptom.
         in_proj_z: g_proj,
-        in_proj_a: b_proj,
-        in_proj_b: f_proj,
+        in_proj_a: f_proj,
+        in_proj_b: b_proj,
         conv1d,
         a_log: dense_keep_f32(store, &format!("{p}.A_log"), gpu)?,
         dt_bias: dense_keep_f32(store, &format!("{p}.dt_bias"), gpu)?,
