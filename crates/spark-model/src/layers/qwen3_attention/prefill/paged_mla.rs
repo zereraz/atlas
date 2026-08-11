@@ -126,6 +126,7 @@ impl Qwen3AttentionLayer {
 
         // KV: latent → norm → expand
         let kv_latent = ctx.buffers.expert_gate_out();
+        eprintln!("[MLA] layer={} PRE-KV-exp\n", self.attn_layer_idx);
         ops::dense_gemm(
             ctx.gpu,
             self.dense_gemm_k,
