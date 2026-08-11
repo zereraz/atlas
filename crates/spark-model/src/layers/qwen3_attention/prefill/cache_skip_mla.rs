@@ -325,7 +325,7 @@ impl Qwen3AttentionLayer {
             // do an quick in-place pad: shift each head's 128 visitng rows to their
             // new 192-per-head locs within v_contiguous and zero the tails.
             let hd_c: usize = (mla_nope + mla_rope) as usize;
-            let vd_bytes = (mla_v_dim * bf16) as usize;
+            let vd_bytes = (mla_v_dim as usize) * bf16;
             let n_tokens = n as usize;
             // If two-half columns: for each (token, head), V-row is at
             // token*nq*128 + head*128, target is at token*nq*192 + head*192
@@ -337,7 +337,7 @@ impl Qwen3AttentionLayer {
                     let src = v_contiguous.offset(t * src_stride * bf16 + head * vd_bytes);
                     let dst = scratch_v.offset(t * dst_stride * bf16 + head * hd_c * bf16);
                     ctx.gpu.copy_d2d_async(src, dst, vd_bytes, stream)?;
-                    let pad = (hd_c - mla_v_dim as usize) * bf16;
+                    let pad: usize = (hd_c - mla_v_dim as usize) * bf16;
                     if pad > 0 {
                         ctx.gpu.memset_async(dst.offset(vd_bytes), 0, pad, stream)?;
                     }
@@ -351,10 +351,10 @@ impl Qwen3AttentionLayer {
                 meta.slot,
                 n,
                 nq,
-                hd_c,
+                hd_c as u32,
                 bs as u32,
-                (nq as usize) * hd_c,
-                (nq as usize) * hd_c,
+                (nq as usize * hd_c) as u32,
+                (nq as usize * hd_c) as u32,
                 stream,
                 ctx.graph_capture,
             )?;
