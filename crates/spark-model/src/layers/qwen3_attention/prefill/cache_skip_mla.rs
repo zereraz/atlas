@@ -332,7 +332,7 @@ impl Qwen3AttentionLayer {
             // token*nq*128 + head*128, target is at token*nq*192 + head*192
             let src_stride = (nkv as usize) * (mla_v_dim as usize);
             let dst_stride = (nkv as usize) * hd_c;
-            let mut scratch_v = ctx.buffers.expert_down_out();
+            let scratch_v = ctx.buffers.expert_down_out();
             for t in 0..n_tokens {
                 for head in 0..nkv as usize {
                     let src = v_contiguous.offset(t * src_stride * bf16 + head * vd_bytes);
