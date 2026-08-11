@@ -333,11 +333,22 @@ fn build_full_attention_bailing(
 
     // ── Load raw Ling ML projections ──────────────────────────────────────────
     // All BF16 (in modules_to_not_convert).
-    let q_proj = dense(store, &format!("{p}.q_proj.weight"))?; // [6144, 2560]
-    let kv_a = dense(store, &format!("{p}.kv_a_proj_with_mqa.weight"))?; // [576, 2560]
-    let kv_b = dense(store, &format!("{p}.kv_b_proj.weight"))?; // [32*(128+128), 512]
+    // Ling stores attention weights as MXFP4-packed under ".weight_packed" +
+    // ".weight_scale"; `dense()` on ".weight" gets garbage (packed bytes read as
+    // bf16). Use dequant_mxfp4_to_bf16 for every dense MLA weight.
+    let q_proj = DenseWeight {
+        weight: crate::weight_map::dequant_mxfp4_to_bf16(store, &format!("{p}.q_proj"), gpu)?,
+    }; // [6144, 2560]
+    let kv_a = DenseWeight {
+        weight: crate::weight_map::dequant_mxfp4_to_bf16(store, &format!("{p}.kv_a_proj_with_mqa"), gpu)?,
+    }; // [576, 2560]
+    let kv_b = DenseWeight {
+        weight: crate::weight_map::dequant_mxfp4_to_bf16(store, &format!("{p}.kv_b_proj"), gpu)?,
+    }; // [32*(128+128), 512]
     let kv_a_norm = dense(store, &format!("{p}.kv_a_layernorm.weight"))?; // [512]
-    let o_dense = dense(store, &format!("{p}.dense.weight"))?; // [2560, 4096]
+    let o_dense = DenseWeight {
+        weight: crate::weight_map::dequant_mxfp4_to_bf16(store, &format!("{p}.dense"), gpu)?,
+    }; // [2560, 4096]
     let g_proj = dense(store, &format!("{p}.g_proj.weight"))?; // [2560, 5120] (output gate)
 
     // ── wq_a / wq_b: identity + q_proj ─────────────────────────────────────────�
