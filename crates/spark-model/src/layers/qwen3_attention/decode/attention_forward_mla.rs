@@ -90,8 +90,13 @@ impl Qwen3AttentionLayer {
         }
 
         // Step 1: Q latent → norm → expand
+        // Ling: when q_lora == h, wq_a is I(h). Skip the GEMV and feed normed
+        // directly. Saves h*h*bf16=13MB per layer and one full GEMV per token.
         let q_latent = ctx.buffers.ssm_ba();
-        prof!("wq_a", {
+        if q_lora == h {
+            // no-op: q_latent already = normed input; we just use `normed` below
+        } else {
+            prof!("wq_a", {
             if let Some(ref wqa_nvfp4) = mla.wq_a_nvfp4 {
                 ops::w4a16_gemv(
                     ctx.gpu,
@@ -115,7 +120,13 @@ impl Qwen3AttentionLayer {
                     stream,
                 )
             }
-        })?;
+            })?;
+        }
+        // Ling: when q_lora == h, wq_a = I, so just use normed as the Q latent.
+        if q_lora == h {
+            // `normed` is BF16 [1, h]; replicate to the same buffer expected.
+            ctx.gpu.copy_d2d_async(normed, q_latent, (q_lora as usize) * 2, stream)?;
+        }
         // Models with no Q-compression (Ling-3.0-flash) have no q_a_layernorm.
         if mla.q_a_norm.weight.0 != 0 {
             prof!("q_norm", {
