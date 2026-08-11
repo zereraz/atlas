@@ -462,6 +462,16 @@ fn build_full_attention_bailing(
     gpu.copy_d2d(w_uk_t_ptr, w_uk_block_diag_ptr, n_kv * w_uk_per_head)
         .with_context(|| format!("Ling[{_i}] w_uk_block_diag copy bytes={}", n_kv * w_uk_per_head))?;
     tracing::warn!("Ling[{_i}] MLA step F: block-diags done");
+    // Build the plain-RoPE inv_freq table for Ling (theta=6e6, no YaRN scaling).
+    // Ling's rope_rope_operator is per-pair inv_freq.
+    let n_pairs = rope / 2;
+    let mut inv_freq_table: Vec<u8> = Vec::with_capacity(n_pairs * 4);
+    for j in 0..n_pairs {
+        let v = 1.0 / (config.rope_theta as f32).powf((2 * j) as f32 / (rope as f32));
+        inv_freq_table.extend_from_slice(&v.to_le_bytes());
+    }
+    let yarn_inv_freq_ptr = gpu_alloc_or_managed(inv_freq_table.len())?;
+    gpu.copy_h2d(&inv_freq_table, yarn_inv_freq_ptr)?;
     let w_uv_block_diag_ptr = gpu_alloc_or_managed(n_kv * kv_lora * v_dim * bf16)?;
     gpu.copy_d2d(w_uv_ptr, w_uv_block_diag_ptr, n_kv * kv_lora * v_dim * bf16)?;
 
@@ -537,7 +547,7 @@ fn build_full_attention_bailing(
         w_qk_absorbed: DenseWeight { weight: wqk_ptr },
         w_uk_block_diag: DenseWeight { weight: w_uk_block_diag_ptr },
         w_uv_block_diag: DenseWeight { weight: w_uv_block_diag_ptr },
-        yarn_inv_freq: spark_runtime::gpu::DevicePtr::NULL,
+        yarn_inv_freq: yarn_inv_freq_ptr,
         // Ling has no q-compression: fake a "full-rank q_lora" axis = h so
         // the absorbed chain's q_latent (= rms_norm(identity*q_proj(x))) has
         // the right size. wq_a=I(h), wq_b=q_proj is mathematically exact.
