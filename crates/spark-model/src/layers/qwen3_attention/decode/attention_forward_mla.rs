@@ -499,7 +499,7 @@ impl Qwen3AttentionLayer {
         args: &DecodeMlaArgs,
     ) -> Result<DevicePtr> {
         let DecodeMlaArgs {
-            normed,
+            normed, hd,
             h, nq, eps, bs, stream,
             ..
         } = *args;
@@ -564,13 +564,26 @@ impl Qwen3AttentionLayer {
             stream,
         )?;
 
-        // 3) RoPE on Q rope-portion + k_rope
-        // Q layout per head: [nope=128, rope=64] -> q_full[head_idx * 192]
-        // We reuse the biuid rope_yarn kernel but with num_kv_heads=1 and toggle head_dim=rop_64
+        // 3) RoPE on Q rope-portion + k_rope.
+        // Extract per-head rope-portion to contiguous [1, nq*64], RoPE, then write back.
+        let q_rope_tmp = ctx.buffers.ssm_conv_out_f32();
+        ops::mla_q_rope_extract_batched(
+            ctx.gpu,
+            self.mla_q_rope_extract_batched_k,
+            q_full,
+            q_rope_tmp,
+            1,
+            nq,
+            hd,
+            mla_nope,
+            mla_rope,
+            nq * hd,
+            stream,
+        )?;
         ops::rope_yarn(
             ctx.gpu,
             self.rope_yarn_k,
-            q_full,
+            q_rope_tmp,
             k_rope_single,
             meta.positions,
             1,
@@ -580,6 +593,19 @@ impl Qwen3AttentionLayer {
             mla_rope,
             mla.yarn_inv_freq,
             ctx.config.rope_theta as f32,
+            stream,
+        )?;
+        ops::mla_q_rope_writeback_batched(
+            ctx.gpu,
+            self.mla_q_rope_writeback_batched_k,
+            q_rope_tmp,
+            q_full,
+            1,
+            nq,
+            hd,
+            mla_nope,
+            mla_rope,
+            nq * hd,
             stream,
         )?;
 
@@ -633,7 +659,7 @@ impl Qwen3AttentionLayer {
             kv_cache,
             meta.slot,
             1,
-            1,               //  one kv head for compressed-MLA caching? use num_kv_heads=nq for expanded
+            nq,              // expanded: num_kv_heads = nq
             hd_cache,
             bs as u32,
             dst_stride_k as u32,
@@ -641,10 +667,8 @@ impl Qwen3AttentionLayer {
             stream,
             ctx.graph_capture,
         )?;
-        // NOTE: GQA-cash mode with num_kv_heads=32 needs the layout change in cache
-        // shape up front. For this minimal path we write with a high num_kv_heads value
-        // matching what was written during the subject-layer prefill; it must match.
-        // (If the prefill still writes compressed-cash, this block has mismatched shapes.)
+        // NOTE: num_kv_heads = nq for expanded; the prefill (cache_skip_mla) also
+        // writes expanded when q_lora_rank == h, so the cache layout matches.
 
         // 7) Standard decode attention
         let attn_out = ctx.buffers.attn_output();

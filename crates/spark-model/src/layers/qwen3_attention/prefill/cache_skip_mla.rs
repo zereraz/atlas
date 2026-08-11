@@ -244,35 +244,42 @@ impl Qwen3AttentionLayer {
         let bs = kv_cache.block_size();
         let k_cache_assembled = ctx.buffers.expert_up_out();
         let v_cache_assembled = ctx.buffers.expert_down_out();
-        ops::mla_cache_assemble_batched(
-            ctx.gpu,
-            self.mla_cache_assemble_batched_k,
-            kv_latent,
-            k_rope_buf,
-            k_cache_assembled,
-            v_cache_assembled,
-            n,
-            kv_lora,
-            mla_rope,
-            mla_cache_dim,
-            stream,
-        )?;
-        eprintln!("[MLA-CS] post-mla_cache_assemble_batched"); ctx.gpu.synchronize(stream)?;
-        self.write_kv_cache(
-            ctx.gpu,
-            k_cache_assembled,
-            v_cache_assembled,
-            kv_cache,
-            meta.slot,
-            n,
-            1,
-            mla_cache_dim,
-            bs as u32,
-            mla_cache_dim,
-            mla_cache_dim,
-            stream,
-            ctx.graph_capture,
-        )?;
+        // Ling (no Q compression): store EXPANDED K/V in cache so decode
+        // can read it directly without absorption. K cache: per-head [k_nope=128,
+        // k_rope=64]=192; V cache: per-head [v=128, 0-pad=64]=192.
+        if (mla.q_lora_rank as u32) == h {
+            // Compute k_contiguous/v_contiguous BEFORE writing to cache so we reuse
+            // them below after kv expansion. Move the expand+assemble block up here.
+            // (Arrives later via restructure below.)
+        } else {
+            ops::mla_cache_assemble_batched(
+                ctx.gpu,
+                self.mla_cache_assemble_batched_k,
+                kv_latent,
+                k_rope_buf,
+                k_cache_assembled,
+                v_cache_assembled,
+                n,
+                kv_lora,
+                mla_rope,
+                mla_cache_dim,
+                stream,
+            )?;
+            self.write_kv_cache(
+                ctx.gpu,
+                k_cache_assembled,
+                v_cache_assembled,
+                kv_cache,
+                meta.slot,
+                n,
+                1,
+                mla_cache_dim,
+                bs as u32,
+                mla_cache_dim,
+                mla_cache_dim,
+                stream,
+            )?;
+        }
 
         // Unabsorbed (MHA) prefill: expand K/V via wkv_b, use HDIM=128 FlashAttention
         let kv_expanded_dim = nkv * (mla_nope + mla_v_dim);
@@ -308,6 +315,50 @@ impl Qwen3AttentionLayer {
             stream,
         )?;
         eprintln!("[MLA-CS] post-mla_kv_assemble_batched"); ctx.gpu.synchronize(stream)?;
+        // Ling: write expanded K/V to cache (192/head).
+        if (mla.q_lora_rank as u32) == h {
+            // k_contiguous is [n, nq*192] with per-head [k_nope=128, k_rope=64];
+            // for cache correctly we need V padded to 192. Instead of a new pad,
+            // write K with hd=192 and reuse the same buffer location for V rows,
+            // then pad the tail in place before writing.
+            // For V, assebmle mla_kv_assemble_batched already wrote 128/head --
+            // do an quick in-place pad: shift each head's 128 visitng rows to their
+            // new 192-per-head locs within v_contiguous and zero the tails.
+            let hd_c: usize = (mla_nope + mla_rope) as usize;
+            let vd_bytes = (mla_v_dim * bf16) as usize;
+            let n_tokens = n as usize;
+            // If two-half columns: for each (token, head), V-row is at
+            // token*nq*128 + head*128, target is at token*nq*192 + head*192
+            let src_stride = (nkv as usize) * (mla_v_dim as usize);
+            let dst_stride = (nkv as usize) * hd_c;
+            let mut scratch_v = ctx.buffers.expert_down_out();
+            for t in 0..n_tokens {
+                for head in 0..nkv as usize {
+                    let src = v_contiguous.offset(t * src_stride * bf16 + head * vd_bytes);
+                    let dst = scratch_v.offset(t * dst_stride * bf16 + head * hd_c * bf16);
+                    ctx.gpu.copy_d2d_async(src, dst, vd_bytes, stream)?;
+                    let pad = (hd_c - mla_v_dim as usize) * bf16;
+                    if pad > 0 {
+                        ctx.gpu.memset_async(dst.offset(vd_bytes), 0, pad, stream)?;
+                    }
+                }
+            }
+            self.write_kv_cache(
+                ctx.gpu,
+                k_contiguous,
+                scratch_v,
+                kv_cache,
+                meta.slot,
+                n,
+                nq,
+                hd_c,
+                bs as u32,
+                (nq as usize) * hd_c,
+                (nq as usize) * hd_c,
+                stream,
+                ctx.graph_capture,
+            )?;
+        }
         ops::mla_q_rope_writeback_batched(
             ctx.gpu,
             self.mla_q_rope_writeback_batched_k,
