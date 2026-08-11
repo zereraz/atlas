@@ -538,7 +538,10 @@ fn build_full_attention_bailing(
         w_uk_block_diag: DenseWeight { weight: w_uk_block_diag_ptr },
         w_uv_block_diag: DenseWeight { weight: w_uv_block_diag_ptr },
         yarn_inv_freq: spark_runtime::gpu::DevicePtr::NULL,
-        q_lora_rank: q_lora, // 192
+        // Ling has no q-compression: fake a "full-rank q_lora" axis = h so
+        // the absorbed chain's q_latent (= rms_norm(identity*q_proj(x))) has
+        // the right size. wq_a=I(h), wq_b=q_proj is mathematically exact.
+        q_lora_rank: config.hidden_size,
         kv_lora_rank: kv_lora,
         nope,
         rope,

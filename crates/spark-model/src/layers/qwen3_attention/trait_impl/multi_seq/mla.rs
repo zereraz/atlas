@@ -204,17 +204,19 @@ impl Qwen3AttentionLayer {
                 stream,
             )?;
         }
-        ops::rms_norm(
-            gpu,
-            self.rms_norm_k,
-            q_latent,
-            &mla.q_a_norm,
-            q_latent,
-            1,
-            d.q_lora,
-            d.eps,
-            stream,
-        )?;
+        if mla.q_a_norm.weight.0 != 0 {
+            ops::rms_norm(
+                gpu,
+                self.rms_norm_k,
+                q_latent,
+                &mla.q_a_norm,
+                q_latent,
+                1,
+                d.q_lora,
+                d.eps,
+                stream,
+            )?;
+        }
         let q_full = buffers.ssm_deinterleaved();
         if let Some(ref wqb_nvfp4) = mla.wq_b_nvfp4 {
             ops::w4a16_gemv(

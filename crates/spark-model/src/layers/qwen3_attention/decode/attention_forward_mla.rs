@@ -107,19 +107,22 @@ impl Qwen3AttentionLayer {
                 )
             }
         })?;
-        prof!("q_norm", {
-            ops::rms_norm(
-                ctx.gpu,
-                self.rms_norm_k,
-                q_latent,
-                &mla.q_a_norm,
-                q_latent,
-                1,
-                q_lora,
-                eps,
-                stream,
-            )
-        })?;
+        // Models with no Q-compression (Ling-3.0-flash) have no q_a_layernorm.
+        if mla.q_a_norm.weight.0 != 0 {
+            prof!("q_norm", {
+                ops::rms_norm(
+                    ctx.gpu,
+                    self.rms_norm_k,
+                    q_latent,
+                    &mla.q_a_norm,
+                    q_latent,
+                    1,
+                    q_lora,
+                    eps,
+                    stream,
+                )
+            })?;
+        }
         let q_full = ctx.buffers.ssm_deinterleaved();
         prof!("wq_b", {
             if let Some(ref wqb_nvfp4) = mla.wq_b_nvfp4 {

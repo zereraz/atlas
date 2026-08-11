@@ -94,17 +94,21 @@ impl Qwen3AttentionLayer {
             stream,
         )?;
         sync!("dense_gemm");
-        ops::rms_norm(
-            ctx.gpu,
-            self.rms_norm_k,
-            q_latent,
-            &mla.q_a_norm,
-            q_latent,
-            n,
-            q_lora,
-            eps,
-            stream,
-        )?;
+        // Models with no Q-compression (Ling-3.0-flash) have no q_a_layernorm.
+        // Skip the rms_norm if q_a_norm was never allocated (NULL pointer).
+        if mla.q_a_norm.weight.0 != 0 {
+            ops::rms_norm(
+                ctx.gpu,
+                self.rms_norm_k,
+                q_latent,
+                &mla.q_a_norm,
+                q_latent,
+                n,
+                q_lora,
+                eps,
+                stream,
+            )?;
+        }
         sync!("rms_norm");
         let qg_out = ctx.buffers.qkv_output();
         ops::dense_gemm(

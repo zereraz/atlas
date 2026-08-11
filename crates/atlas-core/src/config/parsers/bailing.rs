@@ -42,6 +42,17 @@ pub(crate) fn parse_bailing_hybrid(raw: &serde_json::Value) -> Result<ModelConfi
         "bailing_hybrid: rope_theta must be > 0 (Ling uses 6e6)"
     );
 
+    // ── MLA: set q_lora_rank to hidden_size for Ling's "no q-compression" ──
+    // The absorbed-MLA pipeline shapes its q_latent scratch and wq_a GEMM from
+    // `q_lora_rank`; DeepSeek-style models have a true latent bottleneck
+    // (q_lora_rank << hidden). Ling's `q_proj` is direct h→n_q*hd — to drive
+    // the same absorbed chain with q_lora_rank == hidden_size makes
+    // identity `wq_a = I(h)` and `wq_b = q_proj` mathematically exact while
+    // keeping all downstream buffer sizing truthful.
+    if config.q_lora_rank == 0 {
+        config.q_lora_rank = config.hidden_size;
+    }
+
     // ── Hybrid layer layout: layer_group_size=6 → full-attn every 6th ───────
     // FullAttention at idx where (i+1) % group == 0 → {5, 11, 17, 23, 29, 35, 41}.
     let group = raw

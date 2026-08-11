@@ -89,17 +89,19 @@ impl Qwen3AttentionLayer {
                 stream,
             )?;
         }
-        ops::rms_norm(
-            ctx.gpu,
-            self.rms_norm_k,
-            q_latent,
-            &mla.q_a_norm,
-            q_latent,
-            n,
-            q_lora,
-            eps,
-            stream,
-        )?;
+        if mla.q_a_norm.weight.0 != 0 {
+            ops::rms_norm(
+                ctx.gpu,
+                self.rms_norm_k,
+                q_latent,
+                &mla.q_a_norm,
+                q_latent,
+                n,
+                q_lora,
+                eps,
+                stream,
+            )?;
+        }
         let qg_out = ctx.buffers.qkv_output();
         if use_tc {
             ops::dense_gemm_tc(
