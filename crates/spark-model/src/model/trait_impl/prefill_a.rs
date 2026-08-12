@@ -77,6 +77,12 @@ impl TransformerModel {
             return Ok(self.decode_logits_ptr());
         }
 
+        // KDA (Ling per-channel gated delta rule): monolithic per-layer prefill
+        // has no KDA implementation — route to the two-phase path.
+        if self.config.ssm_per_channel_gates {
+            return self.prefill_twophase_dispatch(tokens, seq, n, stream);
+        }
+
         // Guard: prompt must not exceed buffer arena capacity.
         let arena_cap = self.buffers.max_batch_tokens();
         if n > arena_cap {

@@ -56,6 +56,16 @@ impl TransformerModel {
             "chunk_start({chunk_start}) + chunk_len({chunk_len}) > total({total})"
         );
 
+        // KDA (Ling per-channel gated delta rule) has no monolithic per-layer
+        // prefill — `Qwen3SsmLayer::prefill` bails when `kda_mode`. Its genuine
+        // implementation is the two-phase path (phase1 gates + kda_gate +
+        // kda_delta_rule_prefill + phase3). A full single-chunk prefill
+        // (chunk_start==0 covers the whole prompt) is equivalent to
+        // `prefill_twophase`, so delegate rather than hit the monolithic bail.
+        if self.config.ssm_per_channel_gates && chunk_start == 0 && chunk_len == total {
+            return self.prefill_twophase_dispatch(tokens, seq, total, stream);
+        }
+
         // Guard: chunk_len must not exceed buffer arena capacity.
         // Exceeding this causes CUDA illegal memory access (error 700)
         // which permanently corrupts GPU state.
