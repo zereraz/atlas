@@ -72,10 +72,19 @@ impl Qwen3SsmLayer {
                 eps,
                 stream,
             )?;
+            if trace {
+                // post-norm output for MoE decode is BF16; hidden is FP32 residual.
+                Self::norm_f32_dump(ctx.gpu, "decode.moe_input_normed_bf16", normed2, h, false)?;
+                Self::norm_f32_dump(ctx.gpu, "decode.post_ssm_hidden", hidden, h, ctx.config.use_fp32_residual())?;
+            }
             let moe_out = self.ffn.forward(normed2, ctx, stream)?;
             ctx.gpu.synchronize(stream)?;
             let moe_us = t0.elapsed().as_micros();
             tracing::info!("  SSM-MoE: {:.1}ms", moe_us as f64 / 1000.0);
+            if trace {
+                // MoE decode output is BF16 (residual_add consumes BF16).
+                Self::norm_f32_dump(ctx.gpu, "decode.moe_output_bf16", moe_out, h, false)?;
+            }
 
             ops::residual_add(
                 ctx.gpu,
