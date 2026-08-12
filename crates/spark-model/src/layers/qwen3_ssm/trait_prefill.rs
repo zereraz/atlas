@@ -50,6 +50,16 @@ impl Qwen3SsmLayer {
         let d_conv = ctx.config.linear_conv_kernel_dim;
         let qkvz_size = ctx.config.ssm_qkvz_size(); // 12288
 
+        // KDA (Ling per-channel gated delta rule) is a two-phase-prefill-only
+        // path: `prefill_phase1` (gates) + `prefill_kda_full_inner` (recurrence).
+        // This monolithic `prefill()` computes scalar-GDN math — wrong decay
+        // semantics for KDA — so bail loudly rather than produce garbage.
+        if self.kda_mode {
+            anyhow::bail!(
+                "KDA layers only support the two-phase prefill (prefill_phase1 + prefill_kda_full); monolithic prefill() has no KDA implementation"
+            );
+        }
+
         // Profiling helper: sync + timestamp when ATLAS_PROFILE=1
         macro_rules! prof {
             ($label:expr, $t0:expr) => {

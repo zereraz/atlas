@@ -165,27 +165,79 @@ impl Qwen3SsmLayer {
             )?;
         }
 
-        // ── 4+5. Fused BA GEMM + GDN gates (token-parallel) ──
-        let ba_size = ctx.config.ssm_ba_size();
+        // ── 4+5. Gates: GDN fused-BA + gates, or KDA f/b GEMM + kda_gates ──
         let gates_buf = ctx.buffers.ssm_gates();
         let gate_stride = nv * 2;
-        ops::dense_gemm_ba_gates_prefill(
-            ctx.gpu,
-            self.ba_gates_prefill_k,
-            normed,
-            &self.ssm.in_proj_ba,
-            self.ssm.a_log.weight,
-            self.ssm.dt_bias.weight,
-            gates_buf,
-            k,
-            ba_size as u32,
-            h as u32,
-            h as u32,
-            gate_stride as u32,
-            nv as u32,
-            vpg as u32,
-            stream,
-        )?;
+        if self.kda_mode {
+            // KDA (Ling per-channel gated delta rule): f/b are two independent
+            // dense GEMMs from `normed` (NOT the fused interleaved BA weight).
+            // Stage raw BF16 GEMM outputs in the tail of ssm_conv_out_f32 (head
+            // is free pre-conv1d — conv1d_update_prefill targets ssm_qkvz).
+            //   log_decay → gdn_bufs.gate_beta  [total, nv*kd] FP32 (repurposed)
+            //   beta      → gates_buf (ssm_gates) scratch [N, nv] FP32
+            let fb_stage = ctx.buffers.ssm_conv_out_f32();
+            let f_raw = fb_stage;
+            let b_raw = f_raw.offset(num_tokens * nv * kd * bf16);
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm_k,
+                normed,
+                &self.kda_f_proj,
+                f_raw,
+                k,
+                (nv * kd) as u32,
+                h as u32,
+                stream,
+            )?;
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm_k,
+                normed,
+                &self.kda_b_proj,
+                b_raw,
+                k,
+                nv as u32,
+                h as u32,
+                stream,
+            )?;
+            // Per-channel log-decay + sigmoid(beta) for all N tokens (grid.x=N).
+            let log_decay_dst = gdn_bufs.gate_beta.offset(token_offset * nv * kd * fp32);
+            ops::kda_gates(
+                ctx.gpu,
+                self.kda_gates_k,
+                f_raw,
+                b_raw,
+                self.ssm.a_log.weight,
+                self.ssm.dt_bias.weight,
+                log_decay_dst,
+                gates_buf, // beta scratch [N, nv] FP32
+                k,
+                nk as u32,
+                nv as u32,
+                kd as u32,
+                self.kda_lower_bound_f,
+                stream,
+            )?;
+        } else {
+            let ba_size = ctx.config.ssm_ba_size();
+            ops::dense_gemm_ba_gates_prefill(
+                ctx.gpu,
+                self.ba_gates_prefill_k,
+                normed,
+                &self.ssm.in_proj_ba,
+                self.ssm.a_log.weight,
+                self.ssm.dt_bias.weight,
+                gates_buf,
+                k,
+                ba_size as u32,
+                h as u32,
+                h as u32,
+                gate_stride as u32,
+                nv as u32,
+                vpg as u32,
+                stream,
+            )?;
+        }
 
         // ── 6. Batched conv1d for all N tokens ──
         let conv_out_buf = ctx.buffers.ssm_qkvz();
@@ -227,9 +279,12 @@ impl Qwen3SsmLayer {
 
         // Gate/beta: gates_buf [num_tokens, 2*nv] FP32 → gdn_bufs.gate_beta at token_offset
         // Contiguous copy: both layouts are [N, 2*nv] FP32.
-        let gb_dst = gdn_bufs.gate_beta.offset(token_offset * gate_stride * fp32);
-        ctx.gpu
-            .copy_d2d_async(gates_buf, gb_dst, num_tokens * gate_stride * fp32, stream)?;
+        // (KDA wrote log_decay directly into gdn_bufs.gate_beta above — skip.)
+        if !self.kda_mode {
+            let gb_dst = gdn_bufs.gate_beta.offset(token_offset * gate_stride * fp32);
+            ctx.gpu
+                .copy_d2d_async(gates_buf, gb_dst, num_tokens * gate_stride * fp32, stream)?;
+        }
 
         // Z gate: deinterleaved [num_tokens, qkvz_size] BF16, Z at offset (key_dim*2 + value_dim).
         // Z stride in source = qkvz_size, Z stride in dest = value_dim.

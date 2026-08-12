@@ -321,36 +321,7 @@ impl TransformerLayer for Qwen3SsmLayer {
         stream: u64,
     ) -> Result<()> {
         if self.kda_mode {
-            // TODO(KDA): prefill still uses scalar-GDN math (wrong decay
-            // semantics for Ling). Worse: it writes H in [nv,kd,vd] layout
-            // while kda_delta_rule_decode_f32 reads [nv,vd,kd], so the first
-            // decode step reads garbage. DIAG: zero the state entirely so
-            // decode runs against a sane baseline. This gives wrong output
-            // but should NOT crash — validating that the KDA decode pipeline
-            // itself is sound before we port kda_delta_rule_prefill.
-            let ssm_state = state
-                .as_any_mut()
-                .downcast_mut::<SsmLayerState>()
-                .ok_or_else(|| anyhow::anyhow!("Expected SsmLayerState"))?;
-            let h_bytes = ctx.config.linear_num_value_heads
-                * ctx.config.linear_key_head_dim
-                * ctx.config.linear_value_head_dim
-                * 4;
-            ctx.gpu.memset_async(ssm_state.h_state, 0, h_bytes, stream)?;
-            // We still run the GDN recurrence into h_state (it overwrites the
-            // zeroing) — but since the whole thing is garbage, just bail now
-            // and leave zero state for decode.
-            tracing::warn!(
-                "KDA prefill: state zeroed, GDN recurrence SKIPPED (diagnostic)"
-            );
-            // Produce a zero output so downstream layers see zeros rather than
-            // uninitialized memory.
-            let out_bytes = gdn_bufs.total_len
-                * ctx.config.linear_num_value_heads
-                * ctx.config.linear_value_head_dim
-                * 2;
-            ctx.gpu.memset_async(gdn_bufs.output, 0, out_bytes, stream)?;
-            return Ok(());
+            return self.prefill_kda_full_inner(state, gdn_bufs, ctx, stream);
         }
         self.prefill_gdn_full_inner(state, gdn_bufs, ctx, stream)
     }

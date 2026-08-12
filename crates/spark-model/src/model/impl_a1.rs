@@ -379,13 +379,18 @@ impl TransformerModel {
         // (conv_dim > 0). Mamba-2 models (Nemotron) have conv_dim=0 — skip alloc
         // to avoid cuMemAlloc(0) error.
         let gdn_buf_len = max_batch_tokens.min(max_seq_len);
+        // Per-channel KDA log-decay repurposes `gdn_buf_gate_beta`: it stores
+        // [len, nv*kd] FP32 instead of GDN's [len, nv*2]. Size to the max of the
+        // two layouts (interleaved gate/beta vs per-channel log_decay).
+        let kd_sz = config.linear_key_head_dim;
+        let gate_elems = if config.ssm_per_channel_gates { (nv * 2).max(nv * kd_sz) } else { nv * 2 };
         let (gdn_qkv, gdn_gate_beta, gdn_out, gdn_z) = if conv_dim > 0 {
             let qkv = gpu.alloc(gdn_buf_len * conv_dim * 2)?;
-            let gb = gpu.alloc(gdn_buf_len * nv * 2 * 4)?;
+            let gb = gpu.alloc(gdn_buf_len * gate_elems * 4)?;
             let o = gpu.alloc(gdn_buf_len * value_dim * 2)?;
             let z = gpu.alloc(gdn_buf_len * value_dim * 2)?;
             let total_mb =
-                (gdn_buf_len * (conv_dim * 2 + nv * 2 * 4 + value_dim * 2 * 2)) / (1024 * 1024);
+                (gdn_buf_len * (conv_dim * 2 + gate_elems * 4 + value_dim * 2 * 2)) / (1024 * 1024);
             tracing::info!(
                 "GDN prefill buffers: {total_mb} MB for {gdn_buf_len} tokens (chunked SSM prefill)"
             );
