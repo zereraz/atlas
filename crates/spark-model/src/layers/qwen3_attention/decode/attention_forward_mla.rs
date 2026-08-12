@@ -425,6 +425,15 @@ impl Qwen3AttentionLayer {
         let attn_out = ctx.buffers.attn_output();
         let inv_sqrt_d = self.effective_attn_scale(hd);
 
+        if std::env::var_os("ATLAS_MLA_DIAG").is_some() && !ctx.graph_capture {
+            ctx.gpu.synchronize(stream)?;
+            // Dump the first cache entry (block 0 position 0) for K and V.
+            let k_pool = kv_cache.k_pool_ptr(self.attn_layer_idx);
+            let v_pool = kv_cache.v_pool_ptr(self.attn_layer_idx);
+            mla_diag_norm(ctx.gpu, "cache K@blk0pos0", k_pool, mla_cache_dim as usize);
+            mla_diag_norm(ctx.gpu, "cache V@blk0pos0", v_pool, mla_cache_dim as usize);
+        }
+
         if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-paged_attn"); ctx.gpu.synchronize(stream)?; }
         prof!("paged_attn", {
             ops::paged_decode_attn_bf16(
