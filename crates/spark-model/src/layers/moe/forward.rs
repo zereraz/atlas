@@ -47,6 +47,17 @@ impl MoeLayer {
             return Ok(ctx.buffers.moe_output());
         }
 
+        // DIAG: route ALL MoE decode through the prefill (grouped-GEMM) path to
+        // isolate a suspected decode-kernel scale bug (Ling MXFP4 routed experts).
+        if std::env::var("ATLAS_MOE_DECODE_VIA_PREFILL")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            self.forward_prefill(input, 1, ctx, stream)?;
+            return Ok(ctx.buffers.moe_output());
+        }
+
         // GeGLU models: fused kernels now have GELU activation (model-specific override).
         // No longer need to redirect through sorted prefill path.
         // But we still need pre_expert_norm between routing and dispatch.
