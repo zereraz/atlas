@@ -180,6 +180,7 @@ extern "C" __global__ void moe_weighted_sum_blend(
     const __nv_bfloat16* __restrict__ shared_out,    // [hidden]
     const __nv_bfloat16* __restrict__ input,         // [1, K] gate GEMV input (= MoE input)
     const __nv_bfloat16* __restrict__ gate_weight,   // [1, K] shared expert gate weight
+    const float routed_scale,                         // routed_scaling_factor (Ling=2.5)
     unsigned int hidden,
     unsigned int top_k,
     unsigned int K
@@ -249,10 +250,14 @@ extern "C" __global__ void moe_weighted_sum_blend(
     unsigned int j = blockIdx.x * blockDim.x + tid;
     if (j >= hidden) return;
 
+    // Ling/DeepSeek convention: out = routed_scaling_factor * (Σ w_e · out_e)
+    //                              + sigmoid(shared_gate) · shared_out.
+    // `routed_scale = 1.0` for models without `routed_scaling_factor`
+    // (GDN / Qwen3.6 / Mistral): no behavior change for those.
     float acc = 0.0f;
     for (unsigned int e = 0; e < top_k; e++) {
         acc += expert_weights[e] * __bfloat162float(expert_out[(unsigned long long)e * hidden + j]);
     }
-    acc += sigmoid_val * __bfloat162float(shared_out[j]);
+    acc = routed_scale * acc + sigmoid_val * __bfloat162float(shared_out[j]);
     output[j] = __float2bfloat16(acc);
 }

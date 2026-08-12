@@ -39,6 +39,7 @@ pub fn moe_weighted_sum_blend(
     shared_out: DevicePtr,
     input: DevicePtr,
     gate_weight: DevicePtr,
+    routed_scale: f32, // Ling/DeepSeek `routed_scaling_factor` (Ling = 2.5); 1.0 default
     hidden: u32,
     top_k: u32,
     k: u32,
@@ -53,6 +54,7 @@ pub fn moe_weighted_sum_blend(
         .arg_ptr(shared_out)
         .arg_ptr(input)
         .arg_ptr(gate_weight)
+        .arg_f32(routed_scale)
         .arg_u32(hidden)
         .arg_u32(top_k)
         .arg_u32(k)

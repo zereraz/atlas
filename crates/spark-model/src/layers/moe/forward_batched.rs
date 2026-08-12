@@ -259,6 +259,7 @@ impl MoeLayer {
                 shared_out,
                 input_t,
                 self.weights.shared_expert_gate.weight,
+                ctx.config.routed_scaling_factor as f32,
                 h,
                 top_k,
                 h,

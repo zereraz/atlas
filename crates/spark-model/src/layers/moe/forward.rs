@@ -429,6 +429,7 @@ impl MoeLayer {
         } else {
             shared_out
         };
+        let routed_scale = ctx.config.routed_scaling_factor as f32;
         prof!("wsum_blend", {
             ops::moe_weighted_sum_blend(
                 ctx.gpu,
@@ -439,6 +440,7 @@ impl MoeLayer {
                 shared_for_blend,
                 input,
                 self.weights.shared_expert_gate.weight,
+                routed_scale,
                 h,
                 top_k,
                 h,
