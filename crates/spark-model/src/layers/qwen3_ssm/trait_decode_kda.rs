@@ -59,10 +59,33 @@ impl Qwen3SsmLayer {
         let qkv_ptr = deinterleaved;
         let z_ptr = deinterleaved.offset((key_dim * 2 + value_dim) * bf16);
 
+        // ── Buffer layout for the KDA FP32 tail ─────────────────────────
+        // log_decay [nv*kd] FP32 + beta [nv] FP32 + kda_out [nv*vd] FP32 all
+        // live in ssm_conv_out_f32 (which is sized to hold conv_qkv_fp32 +
+        // log_decay + beta + kda_out in sequence — see sizes.rs's
+        // ssm_per_channel_gates branch). Conv writes only the head
+        // `(qk+v)*4` bytes; the KDA control/output areas sit past that.
+        //
+        // f_raw/b_raw (BF16) go at the very head of ssm_conv_out_f32,
+        // consumed by kda_gates BEFORE conv1d_l2norm writes into the same
+        // head. (Earlier revision placed f_raw in ssm_deinterleaved's tail —
+        // but that buffer is exactly qkvz_size*2 bytes, so the f/b GEMVs
+        // wrote past the end and log_decay exploded to NaN.)
+        let conv_f32_head = ctx.buffers.ssm_conv_out_f32();
+        let f_raw_bytes = nv * kd * bf16;
+        let b_raw_bytes = nv * bf16;
+        let conv_bytes = ((key_dim * 2 + value_dim) * fp32) as usize;
+        let f_raw = conv_f32_head;
+        let b_raw = conv_f32_head.offset(f_raw_bytes);
+        let log_decay = conv_f32_head.offset(conv_bytes);
+        let beta = log_decay.offset(nv * kd * fp32);
+        let kda_out_f32 = beta.offset(nv * fp32);
+        debug_assert!(
+            f_raw_bytes + b_raw_bytes <= conv_bytes,
+            "f/b GEMV outputs must fit in conv's head scratch"
+        );
+
         // ── 3. KDA gates: f_proj + b_proj → log_decay[nv,kd] + sigmoid(beta) ──
-        // f_raw/b_raw live at the head of ssm_conv_out_f32; they're consumed
-        // by kda_gates *before* conv1d_l2norm writes into the same head, so
-        // this is safe. (See layout note above the definition.)
         ops::dense_gemv(
             ctx.gpu,
             self.dense_gemv_k,
@@ -89,34 +112,6 @@ impl Qwen3SsmLayer {
             })?;
         }
 
-        // log_decay [nv*kd] FP32 + beta [nv] FP32 + kda_out [nv*vd] FP32 all
-        // live in the unused tail of ssm_conv_out_f32 (which is sized to hold
-        // conv_qkv_fp32 + log_decay + kda_out in sequence — see sizes.rs's
-        // ssm_per_channel_gates branch). Conv writes only the head
-        // `(qk+v)*4` bytes; the KDA control/output areas sit past that.
-        //
-        // IMPORTANT: the earlier version of this code placed f_raw/b_raw in
-        // `ssm_deinterleaved.offset(qkvz_size * 2)` — but that buffer is
-        // sized *exactly* qkvz_size*2 bytes, so the f/b GEMVs wrote past the
-        // end into unowned arena memory and the values were garbage
-        // (observed as NaN at layer 0 decode). Keep f_raw/b_raw in the head
-        // of conv_out_f32 *before* conv runs; conv's `input` is the separate
-        // `deinterleaved` qkvz slice, so conv won't clobber them.
-        let conv_f32_head = ctx.buffers.ssm_conv_out_f32();
-        let f_raw_bytes = nv * kd * bf16;
-        let b_raw_bytes = nv * bf16;
-        let conv_bytes = ((key_dim * 2 + value_dim) * fp32) as usize;
-        // f_raw/b_raw: BF16 images inside conv_out_f32's head (they're
-        // consumed by kda_gates *before* conv writes to the head).
-        let f_raw = conv_f32_head;
-        let b_raw = conv_f32_head.offset(f_raw_bytes);
-        // log_decay/beta: FP32 region after conv's (qk+v)*4 bytes.
-        let log_decay = conv_f32_head.offset(conv_bytes);
-        let beta = log_decay.offset(nv * kd * fp32);
-        // kda_out: FP32 after log_decay + a small pad past beta.
-        let kda_out_f32 = beta.offset(nv * fp32);
-        debug_assert!(f_raw_bytes + b_raw_bytes <= conv_bytes,
-            "f/b GEMV outputs must fit in conv's head scratch");
         ops::kda_gates(
             ctx.gpu,
             self.kda_gates_k,
