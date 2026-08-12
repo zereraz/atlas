@@ -24,6 +24,7 @@ use anyhow::{Context, Result, ensure};
 use spark_runtime::gpu::{DevicePtr, GpuBackend};
 use spark_runtime::weights::{WeightDtype, WeightStore};
 
+#[cfg(test)]
 use super::fp8_lut::fp8_e4m3_to_f32;
 
 /// MXFP4 per-group scale in OCP MX is **E8M0** (a plain power-of-two exponent):
