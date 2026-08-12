@@ -195,9 +195,14 @@ impl Qwen3SsmLayer {
         let q_conv = conv_out;
         let k_conv = conv_out.offset(key_dim * elem);
         let v_conv = conv_out.offset(key_dim * 2 * elem);
+        let kda_kernel = if use_f32_conv {
+            self.kda_decode_f32i_k
+        } else {
+            self.kda_decode_k
+        };
         ops::kda_decode(
             ctx.gpu,
-            self.kda_decode_k,
+            kda_kernel,
             state.h_state,
             q_conv,
             k_conv,

@@ -128,6 +128,9 @@ pub struct Qwen3SsmLayer {
     kda_decode_k: KernelHandle,
     /// `kda_delta_rule_prefill` kernel handle.
     kda_prefill_k: KernelHandle,
+    /// `kda_delta_rule_decode_f32_inputs` — FP32 q/k/v variant for when the
+    /// conv1d_l2norm_f32 kernel is used (its output is FP32, not BF16).
+    kda_decode_f32i_k: KernelHandle,
     /// Log-decay lower bound (safe_gate clamp), from config.kda_lower_bound.
     kda_lower_bound_f: f32,
     // State allocation sizes (pre-computed from config)

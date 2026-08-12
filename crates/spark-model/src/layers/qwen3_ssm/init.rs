@@ -182,6 +182,11 @@ impl Qwen3SsmLayer {
                 "kda_delta_rule",
                 "kda_delta_rule_prefill",
             ),
+            kda_decode_f32i_k: super::super::try_kernel(
+                gpu,
+                "kda_delta_rule",
+                "kda_delta_rule_decode_f32_inputs",
+            ),
             kda_lower_bound_f: config.kda_lower_bound as f32,
         })
     }

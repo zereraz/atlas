@@ -100,6 +100,74 @@ extern "C" __global__ void kda_delta_rule_decode_f32(
 }
 
 // ============================================================================
+// FP32-INPUT DECODE variant. Some pipelines produce FP32 conv outputs
+// (conv1d_update_l2norm_f32) — read q/k/v as FP32 instead of BF16.
+// Same H layout and numerics as the BF16-input decode above.
+// ============================================================================
+extern "C" __global__ void kda_delta_rule_decode_f32_inputs(
+    float* __restrict__ h_state,                  // [batch, nv, v_dim, k_dim]
+    const float* __restrict__ query,              // [batch, nk, k_dim] FP32
+    const float* __restrict__ key,                // [batch, nk, k_dim] FP32
+    const float* __restrict__ value,              // [batch, nv, v_dim] FP32
+    const float* __restrict__ log_decay,          // [batch, nv, k_dim]
+    const float* __restrict__ beta,               // [batch, nv]
+    float* __restrict__ output,                   // [batch, nv, v_dim] FP32
+    const unsigned int batch_size,
+    const unsigned int num_k_heads,
+    const unsigned int num_v_heads,
+    const unsigned int k_dim,
+    const unsigned int v_dim
+) {
+    const unsigned int vh = blockIdx.x;
+    const unsigned int b = blockIdx.y;
+    if (vh >= num_v_heads || b >= batch_size) return;
+
+    const unsigned int tid = threadIdx.x;
+    const unsigned int head_repeat = num_v_heads / num_k_heads;
+    const unsigned int kh = vh / head_repeat;
+
+    float* H = h_state + (((unsigned long long)b * num_v_heads + vh) * v_dim * k_dim)
+                       + (unsigned long long)tid * k_dim;
+    const float* q_ptr = query + (((unsigned long long)b * num_k_heads + kh) * k_dim);
+    const float* k_ptr = key   + (((unsigned long long)b * num_k_heads + kh) * k_dim);
+    const float* v_ptr = value + (((unsigned long long)b * num_v_heads + vh) * v_dim);
+    const float* ld = log_decay + (((unsigned long long)b * num_v_heads + vh) * k_dim);
+    const float beta_t = beta[(unsigned long long)b * num_v_heads + vh];
+
+    if (tid >= v_dim) return;
+
+    float hk = 0.0f;
+    #pragma unroll 4
+    for (unsigned int j = 0; j < k_dim; j += 4) {
+        H[j + 0] *= __expf(ld[j + 0]);
+        H[j + 1] *= __expf(ld[j + 1]);
+        H[j + 2] *= __expf(ld[j + 2]);
+        H[j + 3] *= __expf(ld[j + 3]);
+        hk += H[j + 0] * k_ptr[j + 0]
+            + H[j + 1] * k_ptr[j + 1]
+            + H[j + 2] * k_ptr[j + 2]
+            + H[j + 3] * k_ptr[j + 3];
+    }
+
+    const float v_new = beta_t * (v_ptr[tid] - hk);
+
+    float o = 0.0f;
+    #pragma unroll 4
+    for (unsigned int j = 0; j < k_dim; j += 4) {
+        H[j + 0] += v_new * k_ptr[j + 0];
+        H[j + 1] += v_new * k_ptr[j + 1];
+        H[j + 2] += v_new * k_ptr[j + 2];
+        H[j + 3] += v_new * k_ptr[j + 3];
+        o += H[j + 0] * q_ptr[j + 0]
+           + H[j + 1] * q_ptr[j + 1]
+           + H[j + 2] * q_ptr[j + 2]
+           + H[j + 3] * q_ptr[j + 3];
+    }
+
+    output[((unsigned long long)b * num_v_heads + vh) * v_dim + tid] = o;
+}
+
+// ============================================================================
 // PREFILL (sequential tokens, H resident in shared memory for the whole
 // sequence). smem = (v_dim*k_dim + 2*k_dim + 1) * 4 bytes (64KB + 1KB for
 // 128×128). Strides in elements, following the GDN prefill convention.
