@@ -9,6 +9,12 @@
 
 use super::*;
 
+/// BF16 bits → f32 (host-side DIAG helper).
+#[inline]
+fn bf16_to_f32(bits: u16) -> f32 {
+    f32::from_bits((bits as u32) << 16)
+}
+
 impl Qwen3SsmLayer {
     /// KDA decode: replaces the gate + GDN + gated-norm + out_proj steps of the
     /// scalar-GDN `ssm_forward`. The QKVZ projection, conv1d and L2-norm steps
