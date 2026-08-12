@@ -135,18 +135,6 @@ impl Qwen3SsmLayer {
                 "gated_delta_rule_persistent",
                 "gated_delta_rule_prefill_persistent_wy4_batched",
             ),
-            // Ling KDA (per-channel decay) kernel handles
-            kda_gates_k: super::super::try_kernel(gpu, "kda_preprocess", "kda_gates"),
-            kda_decode_k: super::super::try_kernel(
-                gpu,
-                "kda_delta_rule",
-                "kda_delta_rule_decode_f32",
-            ),
-            kda_prefill_k: super::super::try_kernel(
-                gpu,
-                "kda_delta_rule",
-                "kda_delta_rule_prefill",
-            ),
             gdn_prefill_split4_batched_k: super::super::try_kernel(
                 gpu,
                 "gated_delta_rule",

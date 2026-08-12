@@ -234,7 +234,6 @@ fn build_linear_attention_bailing(
     )?;
 
     let nv = config.linear_num_value_heads;
-    let nk = config.linear_num_key_heads;
     // Ling uses per-channel KDA (FLA chunk_kda), not scalar-GDN: skip
     // `interleave_ba` (that helper assumes [nv,h] a/b gates) and keep raw
     // f_proj/b_proj on the layer via `set_kda_weights`. `in_proj_ba` must
