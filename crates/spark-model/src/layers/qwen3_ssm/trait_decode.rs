@@ -21,7 +21,7 @@ impl Qwen3SsmLayer {
         let h = ctx.config.hidden_size;
         let eps = ctx.config.rms_norm_eps as f32;
         let debug = tracing::enabled!(tracing::Level::DEBUG);
-        let trace = false;
+        let trace = std::env::var("ATLAS_KDA_DIAG").map(|v| v == "1").unwrap_or(false);
 
         let ssm_state = state
             .as_any_mut()
