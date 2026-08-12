@@ -201,18 +201,21 @@ impl BufferSizes {
                 } else {
                     0
                 })
-                // Ling KDA: conv output (qkv*4B) + log_decay [nv*kd*4B] +
-                // KDA output [nv*vd*4B] all share this buffer in sequence.
+                // Ling KDA: conv output (qkv*4B) + f_raw/b_raw (BF16 from f/b proj) +
+                // log_decay (nv*kd*4B) + beta (nv*4B) + KDA output (nv*vd*4B).
+                // f_raw/b_raw must NOT alias conv's head (conv1d_l2norm writes there
+                // after kda_gates reads them — silent overwrite bug).
                 .max(if config.ssm_per_channel_gates {
-                    // Ling KDA FP32 tail layout: [conv(fp32 qk+v) | log_decay(nv*kd) |
-                    // beta(nv) | kda_out(nv*vd)] — add beta separately (was
-                    // missing, short by nv*4 bytes).
-                    let conv = 2 * config.linear_num_key_heads * config.linear_key_head_dim
+                    let bf16 = 2usize;
+                    let fp32 = 4usize;
+                    let conv_elems = 2 * config.linear_num_key_heads * config.linear_key_head_dim
                         + config.linear_num_value_heads * config.linear_value_head_dim;
+                    let f_raw = config.linear_num_value_heads * config.linear_key_head_dim;
+                    let b_raw = config.linear_num_value_heads;
                     let decay = config.linear_num_value_heads * config.linear_key_head_dim;
                     let beta = config.linear_num_value_heads;
                     let out = config.linear_num_value_heads * config.linear_value_head_dim;
-                    m * (conv + decay + beta + out) * 4
+                    m * (conv_elems * fp32 + f_raw * bf16 + b_raw * bf16 + decay * fp32 + beta * fp32 + out * fp32)
                 } else {
                     0
                 })

@@ -66,30 +66,21 @@ impl Qwen3SsmLayer {
         let z_ptr = deinterleaved.offset((key_dim * 2 + value_dim) * bf16);
 
         // ── Buffer layout for the KDA FP32 tail ─────────────────────────
-        // log_decay [nv*kd] FP32 + beta [nv] FP32 + kda_out [nv*vd] FP32 all
-        // live in ssm_conv_out_f32 (which is sized to hold conv_qkv_fp32 +
-        // log_decay + beta + kda_out in sequence — see sizes.rs's
-        // ssm_per_channel_gates branch). Conv writes only the head
-        // `(qk+v)*4` bytes; the KDA control/output areas sit past that.
-        //
-        // f_raw/b_raw (BF16) go at the very head of ssm_conv_out_f32,
-        // consumed by kda_gates BEFORE conv1d_l2norm writes into the same
-        // head. (Earlier revision placed f_raw in ssm_deinterleaved's tail —
-        // but that buffer is exactly qkvz_size*2 bytes, so the f/b GEMVs
-        // wrote past the end and log_decay exploded to NaN.)
+        // All five buffers live in ssm_conv_out_f32, sized so the head is conv's
+        // (qk+v)*FP32 output, then f_raw/b_raw/log_decay/beta/kda_out in sequence.
+        // (Previous revision aliased f_raw/b_raw on conv's head → conv1d_l2norm
+        // overwrote them before kda_decode ran.)
         let conv_f32_head = ctx.buffers.ssm_conv_out_f32();
         let f_raw_bytes = nv * kd * bf16;
         let b_raw_bytes = nv * bf16;
         let conv_bytes = ((key_dim * 2 + value_dim) * fp32) as usize;
-        let f_raw = conv_f32_head;
-        let b_raw = conv_f32_head.offset(f_raw_bytes);
-        let log_decay = conv_f32_head.offset(conv_bytes);
-        let beta = log_decay.offset(nv * kd * fp32);
-        let kda_out_f32 = beta.offset(nv * fp32);
-        debug_assert!(
-            f_raw_bytes + b_raw_bytes <= conv_bytes,
-            "f/b GEMV outputs must fit in conv's head scratch"
-        );
+        let log_decay_bytes = nv * kd * fp32;
+        let beta_bytes = nv * fp32;
+        let f_raw = conv_f32_head.offset(conv_bytes);
+        let b_raw = f_raw.offset(f_raw_bytes);
+        let log_decay = b_raw.offset(b_raw_bytes);
+        let beta = log_decay.offset(log_decay_bytes);
+        let kda_out_f32 = beta.offset(beta_bytes);
 
         // ── 3. KDA gates: f_proj + b_proj → log_decay[nv,kd] + sigmoid(beta) ──
         ops::dense_gemv(
