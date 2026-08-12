@@ -246,11 +246,21 @@ impl Qwen3AttentionLayer {
                     "paged_decode_attn_fp8",
                 ),
             },
-            paged_decode_mla_k: super::super::try_kernel(
-                gpu,
-                "paged_decode",
-                "paged_decode_attn",
-            ),
+            // Ling MLA: cache_dim = kv_lora(512)+rope(64) = 576 > HDIM(256) of the
+            // generic paged_decode kernel — that kernel's smem_o[NUM_WARPS][HDIM]
+            // accumulators overflow into adjacent smem when head_dim>256 reads
+            // sweep past the 256-element slab (observed: attn_out norm ~1e12
+            // from sane q/k inputs). Use the HDIM=576 build when available,
+            // fall back to the generic one for non-MLA shapes.
+            paged_decode_mla_k: {
+                let h576 = super::super::try_kernel(gpu, "paged_decode_mla576", "paged_decode_attn_mla576");
+                if h576.0 != 0 {
+                    h576
+                } else {
+                    tracing::warn!("paged_decode_mla576 missing — MLA decode attention will read OOB smem for head_dim=576");
+                    super::super::try_kernel(gpu, "paged_decode", "paged_decode_attn")
+                }
+            },
             mla_batched_gemv_k: super::super::try_kernel(gpu, "mla_absorbed", "mla_batched_gemv"),
             mla_q_rope_scatter_k: super::super::try_kernel(
                 gpu,
