@@ -26,6 +26,22 @@ use spark_runtime::weights::{WeightDtype, WeightStore};
 
 use super::fp8_lut::fp8_e4m3_to_f32;
 
+/// MXFP4 per-group scale in OCP MX is **E8M0** (a plain power-of-two exponent):
+///   value = 2^(byte - 127); 0xFF is the MX-NaN sentinel (never produced by a
+///   well-formed quantizer for real weights — treat as error)
+///
+/// Ling-3.0-Flash ships its expert scales as UInt8 in this exact E8M0 form
+/// (bytes ~0x78..0x79 → scales ~1/128..1/64 → weights absmax ≈ 0.1).
+/// Previously we decoded these bytes as FP8-E4M3 (0x78 → 256!), which is the
+/// routed-expert residual-explosion bug: per-#group scales ~33000× too large.
+#[inline]
+pub(crate) fn e8m0_to_f32(bits: u8) -> f32 {
+    debug_assert!(bits != 0xFF, "e8m0 scale: MX-NaN sentinel 0xFF in weight scale");
+    let exp = bits as i32 - 127;
+    // branch-free pow2: construct float with exponent bits
+    f32::from_bits(((exp + 127) as u32) << 23)
+}
+
 // Phase B scaffold: `dequant_mxfp4_to_bf16` is exercised by unit tests and will
 // be called by the `bailing` weight loader (next commit). Allow dead code until
 // the loader lands so `#![deny(warnings)]` doesn't gate the primitive merge.
@@ -120,7 +136,8 @@ pub(crate) fn dequant_mxfp4_to_bf16(
             let byte = packed_buf[packed_row + col / 2];
             // Little-nibble first: even col = low nibble, odd col = high nibble.
             let nibble = if col % 2 == 0 { byte & 0x0F } else { byte >> 4 };
-            let s = fp8_e4m3_to_f32(scale_buf[scale_row + col / group]);
+            // MXFP4 scales are E8M0 (power-of-two), NOT FP8-E4M3. See e8m0_to_f32.
+            let s = e8m0_to_f32(scale_buf[scale_row + col / group]);
             let v = e2m1_to_f32(nibble) * s;
             let b = bf16_bytes_from_f32(v);
             bf16_out[(out_row + col) * 2] = b[0];
@@ -167,11 +184,18 @@ mod tests {
 
     #[test]
     fn mxfp4_scalar_composition() {
-        // e2m1=1.5 (code 0x3) × e4m3 scale 2.0 (0x40: exp=8 → 2^(8-7)*(1+0)=2.0)
-        // → 3.0. Verifies the two LUTs compose into the expected product.
-        let product = e2m1_to_f32(0x3) * fp8_e4m3_to_f32(0x40);
+        // MXFP4 scales are E8M0: byte 0x80 (=128) → 2^(128-127) = 2.0
+        assert_eq!(e8m0_to_f32(0x80), 2.0);
+        // byte 0x7F (=127) → 2^0 = 1.0
+        assert_eq!(e8m0_to_f32(0x7F), 1.0);
+        // byte 0x78 (=120) — the actual value all over Ling's expert scales → 2^-7 = 1/128
+        assert_eq!(e8m0_to_f32(0x78), 1.0 / 128.0);
+        // byte 0x79 (=121) → 2^-6 = 1/64
+        assert_eq!(e8m0_to_f32(0x79), 1.0 / 64.0);
+        // e2m1=1.5 × e8m0(2.0) = 3.0
+        let product = e2m1_to_f32(0x3) * e8m0_to_f32(0x80);
         assert!((product - 3.0).abs() < 1e-6, "product={product}");
-        // e4m3 2.0 reference: byte 0x40 = S0 exp=1000(8) mant=000 → 2.0.
+        // (Keep the E4M3 table pinned too — still used by the FP8 path.)
         assert_eq!(fp8_e4m3_to_f32(0x40), 2.0);
     }
 }
