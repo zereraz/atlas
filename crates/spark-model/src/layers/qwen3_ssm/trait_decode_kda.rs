@@ -124,7 +124,7 @@ impl Qwen3SsmLayer {
             ctx.gpu.copy_d2h(b_raw, &mut bb)?;
             let bv: Vec<f32> = bb.chunks_exact(2).take(4)
                 .map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); bf16_to_f32(b) }).collect();
-            tracing::info!("KDA-DIAG L{} f_raw[:4]={:?} b_raw[:4]={:?}", self.layer_idx, fv, bv);
+            tracing::info!("KDA-DIAG f_raw[:4]={:?} b_raw[:4]={:?}", fv, bv);
         }
 
         ops::kda_gates(
@@ -155,7 +155,7 @@ impl Qwen3SsmLayer {
             ctx.gpu.copy_d2h(beta, &mut bb)?;
             let bv: Vec<f32> = bb.chunks_exact(4).take(4)
                 .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
-            tracing::info!("KDA-DIAG L{} log_decay[:4]={:?} beta[:4]={:?}", self.layer_idx, ld, bv);
+            tracing::info!("KDA-DIAG log_decay[:4]={:?} beta[:4]={:?}", ld, bv);
         }
 
         // ── 4. Conv1d + SiLU + L2-norm on Q/K ─────────────────────────────
@@ -196,7 +196,7 @@ impl Qwen3SsmLayer {
             } else {
                 qb.chunks_exact(2).take(4).map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); bf16_to_f32(b) }).collect()
             };
-            tracing::info!("KDA-DIAG L{} conv_out[:4]={:?}", self.layer_idx, q);
+            tracing::info!("KDA-DIAG conv_out[:4]={:?}", q);
         }
 
         // ── 5. Per-channel delta rule (v-major H state), FP32 output ──────
@@ -229,7 +229,7 @@ impl Qwen3SsmLayer {
             ctx.gpu.copy_d2h(kda_out_f32, &mut ob)?;
             let o: Vec<f32> = ob.chunks_exact(4).take(4)
                 .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
-            tracing::info!("KDA-DIAG L{} kda_out[:4]={:?}", self.layer_idx, o);
+            tracing::info!("KDA-DIAG kda_out[:4]={:?}", o);
         }
 
         // FP32 GDN path needs the dedicated FP32 norm kernel.
