@@ -204,12 +204,15 @@ impl BufferSizes {
                 // Ling KDA: conv output (qkv*4B) + log_decay [nv*kd*4B] +
                 // KDA output [nv*vd*4B] all share this buffer in sequence.
                 .max(if config.ssm_per_channel_gates {
-                    let lin = config.linear_num_value_heads
-                        * (config.linear_key_head_dim + config.linear_value_head_dim);
-                    m * ((2 * config.linear_num_key_heads * config.linear_key_head_dim
-                        + config.linear_num_value_heads * config.linear_value_head_dim)
-                        * 4
-                        + lin * 4)
+                    // Ling KDA FP32 tail layout: [conv(fp32 qk+v) | log_decay(nv*kd) |
+                    // beta(nv) | kda_out(nv*vd)] — add beta separately (was
+                    // missing, short by nv*4 bytes).
+                    let conv = 2 * config.linear_num_key_heads * config.linear_key_head_dim
+                        + config.linear_num_value_heads * config.linear_value_head_dim;
+                    let decay = config.linear_num_value_heads * config.linear_key_head_dim;
+                    let beta = config.linear_num_value_heads;
+                    let out = config.linear_num_value_heads * config.linear_value_head_dim;
+                    m * (conv + decay + beta + out) * 4
                 } else {
                     0
                 })
