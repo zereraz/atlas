@@ -11,6 +11,28 @@ use anyhow::Result;
 use spark_runtime::gpu::DevicePtr;
 use spark_runtime::kv_cache::PagedKvCache;
 
+/// DIAG helper: download `len` BF16 elems and log L2 norm + max_abs + first4.
+fn mla_diag_norm(gpu: &dyn spark_runtime::gpu::GpuBackend, label: &str, ptr: DevicePtr, len: usize) {
+    if std::env::var_os("ATLAS_MLA_DIAG").is_none() {
+        return;
+    }
+    let mut buf = vec![0u8; len * 2];
+    if gpu.copy_d2h(ptr, &mut buf).is_err() {
+        tracing::warn!("MLA-DIAG {label}: d2h failed");
+        return;
+    }
+    let vals: Vec<f32> = (0..len)
+        .map(|i| {
+            let bits = u16::from_le_bytes([buf[i * 2], buf[i * 2 + 1]]);
+            f32::from_bits((bits as u32) << 16)
+        })
+        .collect();
+    let norm: f32 = vals.iter().map(|v| v * v).sum::<f32>().sqrt();
+    let max_abs = vals.iter().fold(0f32, |a, &b| a.max(b.abs()));
+    let first4: Vec<f32> = vals.iter().take(4).copied().collect();
+    tracing::info!("MLA-DIAG {label}: len={len} norm={norm:.4e} max_abs={max_abs:.4e} first4={first4:.6?}");
+}
+
 use super::super::Qwen3AttentionLayer;
 use crate::layer::ForwardContext;
 use crate::layers::ops;
@@ -164,6 +186,7 @@ impl Qwen3AttentionLayer {
             }
         })?;
 
+        mla_diag_norm(ctx.gpu, "q_full(wq_b out)", q_full, nq as usize * hd as usize);
         // Step 2: Q_absorbed via batched GEMV
         let mla_cache_dim = kv_lora + mla_rope;
         let q_absorbed_buf = ctx.buffers.expert_up_out();
@@ -206,6 +229,7 @@ impl Qwen3AttentionLayer {
                 Ok(())
             }
         })?;
+        mla_diag_norm(ctx.gpu, "q_absorbed", q_absorbed_buf, nq as usize * mla_cache_dim as usize);
 
         // Q_rope scatter
         let q_rope_direct = ctx.buffers.ssm_conv_out_f32();
@@ -341,6 +365,8 @@ impl Qwen3AttentionLayer {
                 Ok(())
             }
         })?;
+        mla_diag_norm(ctx.gpu, "kv_latent(normed)", kv_latent, kv_lora as usize);
+        mla_diag_norm(ctx.gpu, "k_rope(post-rope)", k_rope_single, mla_rope as usize);
 
         // Step 6: Cache assemble + write
         let k_cache_entry = k_out;
@@ -422,6 +448,7 @@ impl Qwen3AttentionLayer {
                 stream,
             )
         })?;
+        mla_diag_norm(ctx.gpu, "attn_out(paged)", attn_out, nq as usize * mla_cache_dim as usize);
 
         // Step 9: V extraction (batched GEMV)
         let v_extracted = ctx.buffers.norm_output();
@@ -465,6 +492,7 @@ impl Qwen3AttentionLayer {
             }
         })?;
 
+        mla_diag_norm(ctx.gpu, "v_extracted", v_extracted, nq as usize * mla_v_dim as usize);
         // Step 10: O projection
         let o_out = ctx.buffers.qkv_output();
         if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wo"); ctx.gpu.synchronize(stream)?; }
@@ -493,6 +521,7 @@ impl Qwen3AttentionLayer {
                 )
             }
         })?;
+        mla_diag_norm(ctx.gpu, "o_out(wo)", o_out, h as usize);
 
         Ok(o_out)
     }
