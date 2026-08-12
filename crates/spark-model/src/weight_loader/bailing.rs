@@ -523,7 +523,11 @@ fn build_full_attention_bailing(
         wq_a: DenseWeight { weight: wq_a_dense },
         wq_a_nvfp4: None,
         wq_b: wq_b_dense,
-        wq_b_nvfp4: Some(quantize_to_nvfp4(&wq_b_dense, n_heads * hd, h, gpu, absmax_k, quantize_k, stream)?),
+        // DIAG: force the dense BF16 wq_b GEMV path while the NVFP4 wq_b GEMV
+        // is suspected of OOB-reading scales and crashing (ILLEGAL_ADDRESS at
+        // decode tok N pre-wq_b + ILLEGAL_ADDRESS).
+        wq_b_nvfp4: None,
+        // was: Some(quantize_to_nvfp4(&wq_b_dense, n_heads * hd, h, gpu, absmax_k, quantize_k, stream)?),
         q_a_norm: DenseWeight {
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
