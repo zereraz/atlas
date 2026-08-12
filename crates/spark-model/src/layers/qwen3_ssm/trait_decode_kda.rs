@@ -116,6 +116,15 @@ impl Qwen3SsmLayer {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda f/b gemv");
             })?;
+            let mut fb = vec![0u8; 32];
+            ctx.gpu.copy_d2h(f_raw, &mut fb)?;
+            let fv: Vec<f32> = fb.chunks_exact(2).take(4)
+                .map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); bf16_to_f32(b) }).collect();
+            let mut bb = vec![0u8; 8];
+            ctx.gpu.copy_d2h(b_raw, &mut bb)?;
+            let bv: Vec<f32> = bb.chunks_exact(2).take(4)
+                .map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); bf16_to_f32(b) }).collect();
+            tracing::info!("KDA-DIAG L{} f_raw[:4]={:?} b_raw[:4]={:?}", self.layer_idx, fv, bv);
         }
 
         ops::kda_gates(
@@ -138,6 +147,15 @@ impl Qwen3SsmLayer {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda_gates");
             })?;
+            let mut ldb = vec![0u8; 32];
+            ctx.gpu.copy_d2h(log_decay, &mut ldb)?;
+            let ld: Vec<f32> = ldb.chunks_exact(4).take(4)
+                .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+            let mut bb = vec![0u8; 16];
+            ctx.gpu.copy_d2h(beta, &mut bb)?;
+            let bv: Vec<f32> = bb.chunks_exact(4).take(4)
+                .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+            tracing::info!("KDA-DIAG L{} log_decay[:4]={:?} beta[:4]={:?}", self.layer_idx, ld, bv);
         }
 
         // ── 4. Conv1d + SiLU + L2-norm on Q/K ─────────────────────────────
@@ -171,6 +189,14 @@ impl Qwen3SsmLayer {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda conv1d_l2norm");
             })?;
+            let mut qb = vec![0u8; 32];
+            ctx.gpu.copy_d2h(conv_out, &mut qb)?;
+            let q: Vec<f32> = if use_f32_conv {
+                qb.chunks_exact(4).take(4).map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect()
+            } else {
+                qb.chunks_exact(2).take(4).map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); bf16_to_f32(b) }).collect()
+            };
+            tracing::info!("KDA-DIAG L{} conv_out[:4]={:?}", self.layer_idx, q);
         }
 
         // ── 5. Per-channel delta rule (v-major H state), FP32 output ──────
@@ -199,6 +225,11 @@ impl Qwen3SsmLayer {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda_decode");
             })?;
+            let mut ob = vec![0u8; 32];
+            ctx.gpu.copy_d2h(kda_out_f32, &mut ob)?;
+            let o: Vec<f32> = ob.chunks_exact(4).take(4)
+                .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+            tracing::info!("KDA-DIAG L{} kda_out[:4]={:?}", self.layer_idx, o);
         }
 
         // FP32 GDN path needs the dedicated FP32 norm kernel.
