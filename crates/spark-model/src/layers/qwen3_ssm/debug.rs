@@ -128,6 +128,44 @@ impl Qwen3SsmLayer {
     }
 
     /// Debug: read first N FP32 values from device and log them.
+    pub(super) fn norm_f32_dump(
+        gpu: &dyn GpuBackend,
+        label: &str,
+        ptr: DevicePtr,
+        len: usize,
+        is_f32: bool,
+    ) -> anyhow::Result<()> {
+        let mut vals: Vec<f32> = Vec::with_capacity(len);
+        if is_f32 {
+            let mut buf = vec![0u8; len * 4];
+            gpu.copy_d2h(ptr, &mut buf)?;
+            for i in 0..len {
+                vals.push(f32::from_le_bytes([
+                    buf[i * 4],
+                    buf[i * 4 + 1],
+                    buf[i * 4 + 2],
+                    buf[i * 4 + 3],
+                ]));
+            }
+        } else {
+            let mut buf = vec![0u8; len * 2];
+            gpu.copy_d2h(ptr, &mut buf)?;
+            for i in 0..len {
+                let lo = buf[i * 2] as u32;
+                let hi = buf[i * 2 + 1] as u32;
+                vals.push(f32::from_bits(((lo | (hi << 8)) << 16) as u32));
+            }
+        }
+        let norm: f32 = vals.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let max = vals.iter().fold(0f32, |a, &b| a.max(b.abs()));
+        let first4: Vec<f32> = vals.iter().take(4).cloned().collect();
+        tracing::info!(
+            "  NORM {label}: len={len} norm={norm:.4} max_abs={max:.4e} first4={first4:.4?}"
+        );
+        Ok(())
+    }
+
+    /// Debug: read first N FP32 values from device and log them.
     pub(super) fn debug_f32(gpu: &dyn GpuBackend, label: &str, ptr: DevicePtr, n: usize) {
         let mut buf = vec![0u8; n * 4];
         if gpu.copy_d2h(ptr, &mut buf).is_err() {

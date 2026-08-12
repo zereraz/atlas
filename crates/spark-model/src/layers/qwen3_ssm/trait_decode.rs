@@ -108,11 +108,20 @@ impl Qwen3SsmLayer {
             Self::debug_bf16(ctx.gpu, "post-ssm-hidden", hidden, 4);
             Self::debug_bf16(ctx.gpu, "moe-input-normed", normed2, 4);
         }
+        if trace {
+            ctx.gpu.synchronize(stream)?;
+            Self::norm_f32_dump(ctx.gpu, "decode.moe_input_normed", normed2, h, true)?;
+            Self::norm_f32_dump(ctx.gpu, "decode.post_ssm_hidden", hidden, h, ctx.config.use_fp32_residual())?;
+        }
 
         let moe_out = self.ffn.forward(normed2, ctx, stream)?;
         if debug {
             ctx.gpu.synchronize(stream)?;
             Self::debug_bf16(ctx.gpu, "moe-output", moe_out, 8);
+        }
+        if trace {
+            ctx.gpu.synchronize(stream)?;
+            Self::norm_f32_dump(ctx.gpu, "decode.moe_output", moe_out, h, true)?;
         }
         ops::residual_add(
             ctx.gpu,
