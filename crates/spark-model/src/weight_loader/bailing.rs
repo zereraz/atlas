@@ -532,15 +532,19 @@ fn build_full_attention_bailing(
             weight: spark_runtime::gpu::DevicePtr::NULL,
         },
         wkv_a: DenseWeight { weight: wkv_a_dense.weight },
-        wkv_a_nvfp4: Some(quantize_to_nvfp4(
-            &DenseWeight { weight: wkv_a_dense.weight },
-            kv_lora,
-            h,
-            gpu,
-            absmax_k,
-            quantize_k,
-            stream,
-        )?),
+        // DIAG: same NVFP4-GEMV family as wq_b/wo (both forced dense).
+        // The w4a16 NVFP4 GEMV produced L5-residual blowup (frozen garbage
+        // 1.28e19 across layers) — likely wrong scale indexing at N=576.
+        wkv_a_nvfp4: None,
+        // was: Some(quantize_to_nvfp4(
+        //     &DenseWeight { weight: wkv_a_dense.weight },
+        //     kv_lora,
+        //     h,
+        //     gpu,
+        //     absmax_k,
+        //     quantize_k,
+        //     stream,
+        // )?),
         wkv_b: wkv_b_dense,
         kv_a_norm: kv_a_norm_dense,
         wkv_a_rope: DenseWeight { weight: wkv_a_rope_dense.weight },
