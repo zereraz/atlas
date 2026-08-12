@@ -22,6 +22,13 @@ impl Qwen3SsmLayer {
         let debug = tracing::enabled!(tracing::Level::DEBUG);
         let profile = ctx.profile;
 
+        // Ling KDA (per-channel decay) — replaces the GDN recurrence with the
+        // FLA chunk_kda port (separate gates via `kda_gates`, delta rule in
+        // `kda_delta_rule_decode_f32`, v-major H layout).
+        if self.kda_mode {
+            return self.ssm_forward_kda(normed, state, ctx, stream, trace);
+        }
+
         macro_rules! prof {
             ($label:expr, $body:expr) => {{
                 if profile {

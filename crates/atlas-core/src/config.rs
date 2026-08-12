@@ -124,6 +124,13 @@ pub struct ModelConfig {
     // ── Model type ──
     #[serde(default)]
     pub model_type: String,
+    /// True for Ling / bailing-hybrid KDA layers (per-channel delta-rule
+    /// decay). Loaded separately from Qwen3.5-style scalar-GA GDN weights;
+    /// gates are computed by the `kda_gates` kernel instead of
+    /// `compute_gdn_gates`. Set by the config parser when `model_type`
+    /// starts with `bailing`.
+    #[serde(default)]
+    pub ssm_per_channel_gates: bool,
 
     // ── MTP ──
     #[serde(default)]
@@ -161,6 +168,9 @@ pub struct ModelConfig {
     /// Nemotron-H routed scaling factor for expert outputs.
     #[serde(default = "default_one_f64")]
     pub routed_scaling_factor: f64,
+    /// Ling KDA safe-gate clamp: log-decay lower bound (default 0 = disabled).
+    #[serde(default)]
+    pub kda_lower_bound: f64,
     /// LatentMoE: latent projection dimension for routed experts (Super 120B).
     /// When present, routed experts operate in latent space `[moe_latent_size]`
     /// instead of full `[hidden_size]`. Absent for Nano 30B.

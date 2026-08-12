@@ -139,10 +139,10 @@ pub(crate) fn load_ssm_bailing(
 
     Ok(SsmWeightsQwen35 {
         in_proj_qkv,
-        // Ling naming: f_proj = forget/decay (mapped to in_proj_a = alpha),
-        // b_proj = sigmoid write-gate (mapped to in_proj_b = beta). G_proj is
-        // the output Z-gate. Swapping a/b makes the exp(-A·softplus()) path
-        // explode instead of decay, which matches the L2+ norm=1e13 symptom.
+        // Ling KDA is per-channel. `f_proj` ([nv*kd, h]) feeds the log-decay
+        // recurrence; `b_proj` ([nv, h]) is the scalar write gate. The legacy
+        // `in_proj_a`/`in_proj_b` slots are unused by `kda_mode` — store the
+        // raw weights here for the loader to re-expose.
         in_proj_z: g_proj,
         in_proj_a: f_proj,
         in_proj_b: b_proj,

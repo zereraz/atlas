@@ -112,6 +112,24 @@ pub struct Qwen3SsmLayer {
     /// in which case decode_batched(K=17) falls through to the sequential
     /// per-token path.
     gdn_wy17_k: KernelHandle,
+    // ── Ling KDA (per-channel decay) — FLA chunk_kda port ───────────────────
+    /// Per-channel delta-rule is used instead of the scalar-GDN kernels when
+    /// `config.ssm_per_channel_gates` (bailing_hybrid). The f/b projections
+    /// are loaded straight from `{lp}.attention.{f,g,b,o}_proj` (already fused
+    /// into `ssm.in_proj_z`/`out_proj` by the bailing loader).
+    kda_mode: bool,
+    /// f_proj (forget gate) weight: [nv*kd, h] BF16.
+    kda_f_proj: DenseWeight,
+    /// b_proj (beta) weight: [nv, h] BF16.
+    kda_b_proj: DenseWeight,
+    /// `kda_gates` kernel handle: raw f/b → log_decay[nv,kd] + sigmoid(beta).
+    kda_gates_k: KernelHandle,
+    /// `kda_delta_rule_decode_f32` kernel handle.
+    kda_decode_k: KernelHandle,
+    /// `kda_delta_rule_prefill` kernel handle.
+    kda_prefill_k: KernelHandle,
+    /// Log-decay lower bound (safe_gate clamp), from config.kda_lower_bound.
+    kda_lower_bound_f: f32,
     // State allocation sizes (pre-computed from config)
     h_state_bytes: usize,
     conv_state_bytes: usize,
@@ -127,6 +145,7 @@ mod debug;
 mod init;
 mod ssm_forward;
 mod trait_decode;
+mod trait_decode_kda;
 mod trait_decode_batched;
 mod trait_decode_batched_conv_gdn;
 mod trait_decode_multi_seq;
@@ -298,6 +317,14 @@ impl TransformerLayer for Qwen3SsmLayer {
         ctx: &ForwardContext,
         stream: u64,
     ) -> Result<()> {
+        if self.kda_mode {
+            // TODO(KDA): prefill still uses scalar-GDN math (wrong decay
+            // semantics for Ling). Decode uses the correct KDA kernel. Wire
+            // kda_delta_rule_prefill into the chunked prefill pipeline next.
+            tracing::warn!(
+                "KDA prefill falling back to scalar-GDN recurrence — state will diverge from FLA reference"
+            );
+        }
         self.prefill_gdn_full_inner(state, gdn_bufs, ctx, stream)
     }
 

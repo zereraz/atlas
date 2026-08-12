@@ -201,6 +201,18 @@ impl BufferSizes {
                 } else {
                     0
                 })
+                // Ling KDA: conv output (qkv*4B) + log_decay [nv*kd*4B] +
+                // KDA output [nv*vd*4B] all share this buffer in sequence.
+                .max(if config.ssm_per_channel_gates {
+                    let lin = config.linear_num_value_heads
+                        * (config.linear_key_head_dim + config.linear_value_head_dim);
+                    m * ((2 * config.linear_num_key_heads * config.linear_key_head_dim
+                        + config.linear_num_value_heads * config.linear_value_head_dim)
+                        * 4
+                        + lin * 4)
+                } else {
+                    0
+                })
                 .max(256),
             scratch,
             expert_gate_out,

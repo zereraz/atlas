@@ -20,7 +20,7 @@ use crate::layer::TransformerLayer;
 use crate::layers::{DenseFfnLayer, FfnComponent, MoeLayer, Qwen3SsmLayer};
 use crate::weight_map::{
     DenseWeight, MtpWeights, SsmWeights, dense, detect_nvfp4_variant, gpu_concat_rows,
-    interleave_ba, load_dense_ffn, load_moe_bailing, load_mtp, load_ssm_bailing,
+    load_dense_ffn, load_moe_bailing, load_mtp, load_ssm_bailing,
     quantize_to_nvfp4,
 };
 
@@ -235,14 +235,13 @@ fn build_linear_attention_bailing(
 
     let nv = config.linear_num_value_heads;
     let nk = config.linear_num_key_heads;
-    let ba_dense = interleave_ba(
-        &DenseWeight { weight: ssm35.in_proj_a.weight },
-        &DenseWeight { weight: ssm35.in_proj_b.weight },
-        nv,
-        nk,
-        h,
-        gpu,
-    )?;
+    // Ling uses per-channel KDA (FLA chunk_kda), not scalar-GDN: skip
+    // `interleave_ba` (that helper assumes [nv,h] a/b gates) and keep raw
+    // f_proj/b_proj on the layer via `set_kda_weights`. `in_proj_ba` must
+    // still satisfy SsmWeights invariants — alias b_proj there.
+    let ba_dense = DenseWeight {
+        weight: ssm35.in_proj_b.weight,
+    };
 
     let qkvz_size = config.ssm_qkvz_size();
     let qkvz_nvfp4 = quantize_to_nvfp4(&qkvz_dense, qkvz_size, h, gpu, absmax_k, quantize_k, stream)?;
@@ -274,6 +273,15 @@ fn build_linear_attention_bailing(
         config,
         gpu,
     )?;
+    // Install Ling KDA projections + enable the FLA `chunk_kda` decode path.
+    layer.set_kda_weights(
+        DenseWeight {
+            weight: ssm35.in_proj_a.weight, // f_proj (per-channel log-decay)
+        },
+        DenseWeight {
+            weight: ssm35.in_proj_b.weight, // b_proj (scalar write gate)
+        },
+    );
     layer.predequant_for_prefill(gpu, config, stream)?;
     Ok(Box::new(layer))
 }

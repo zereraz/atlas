@@ -66,6 +66,8 @@ impl ModelConfig {
             moe_shared_expert_intermediate_size: 0,
             first_k_dense_replace: 0,
             routed_scaling_factor: 1.0,
+            kda_lower_bound: 0.0,
+            ssm_per_channel_gates: false,
             moe_latent_size: 0,
             vision: None,
             quantization_config: None,

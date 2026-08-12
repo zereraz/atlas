@@ -53,6 +53,17 @@ pub(crate) fn parse_bailing_hybrid(raw: &serde_json::Value) -> Result<ModelConfi
         config.q_lora_rank = config.hidden_size;
     }
 
+    // Ling KDA uses per-channel delta-rule decay (FLA chunk_kda): the
+    // f_proj gate is [nv*kd] wide, not nv. Switch the SSM layer to the
+    // kda_delta_rule kernels and the dedicated f/b gate path.
+    config.ssm_per_channel_gates = true;
+    if config.kda_lower_bound == 0.0 {
+        config.kda_lower_bound = raw
+            .get("kda_lower_bound")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(-5.0);
+    }
+
     // ── Hybrid layer layout: layer_group_size=6 → full-attn every 6th ───────
     // FullAttention at idx where (i+1) % group == 0 → {5, 11, 17, 23, 29, 35, 41}.
     let group = raw

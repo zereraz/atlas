@@ -135,6 +135,18 @@ impl Qwen3SsmLayer {
                 "gated_delta_rule_persistent",
                 "gated_delta_rule_prefill_persistent_wy4_batched",
             ),
+            // Ling KDA (per-channel decay) kernel handles
+            kda_gates_k: super::super::try_kernel(gpu, "kda_preprocess", "kda_gates"),
+            kda_decode_k: super::super::try_kernel(
+                gpu,
+                "kda_delta_rule",
+                "kda_delta_rule_decode_f32",
+            ),
+            kda_prefill_k: super::super::try_kernel(
+                gpu,
+                "kda_delta_rule",
+                "kda_delta_rule_prefill",
+            ),
             gdn_prefill_split4_batched_k: super::super::try_kernel(
                 gpu,
                 "gated_delta_rule",
@@ -163,7 +175,35 @@ impl Qwen3SsmLayer {
             out_proj_fp8: None,
             fp8_gemm_k: gpu.kernel("w4a16", "fp8_gemm_t")?,
             fp8_gemm_t_m128_k: gpu.kernel("w4a16", "fp8_gemm_t_m128")?,
+            // KDA handles: lazy — populated by `set_kda_weights` for Ling.
+            kda_mode: false,
+            kda_f_proj: DenseWeight {
+                weight: spark_runtime::gpu::DevicePtr::NULL,
+            },
+            kda_b_proj: DenseWeight {
+                weight: spark_runtime::gpu::DevicePtr::NULL,
+            },
+            kda_gates_k: super::super::try_kernel(gpu, "kda_preprocess", "kda_gates"),
+            kda_decode_k: super::super::try_kernel(
+                gpu,
+                "kda_delta_rule",
+                "kda_delta_rule_decode_f32",
+            ),
+            kda_prefill_k: super::super::try_kernel(
+                gpu,
+                "kda_delta_rule",
+                "kda_delta_rule_prefill",
+            ),
+            kda_lower_bound_f: config.kda_lower_bound as f32,
         })
+    }
+
+    /// Install Ling KDA weights (f_proj / b_proj loaded as raw BF16
+    /// `DenseWeight` from the bailing loader). Enables `kda_mode`.
+    pub fn set_kda_weights(&mut self, f_proj: DenseWeight, b_proj: DenseWeight) {
+        self.kda_f_proj = f_proj;
+        self.kda_b_proj = b_proj;
+        self.kda_mode = true;
     }
 
     /// Construct an SSM layer where QKVZ projection output is already sequential.
