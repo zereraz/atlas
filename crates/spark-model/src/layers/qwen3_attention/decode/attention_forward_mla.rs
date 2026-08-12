@@ -427,11 +427,27 @@ impl Qwen3AttentionLayer {
 
         if std::env::var_os("ATLAS_MLA_DIAG").is_some() && !ctx.graph_capture {
             ctx.gpu.synchronize(stream)?;
-            // Dump the first cache entry (block 0 position 0) for K and V.
+            // Dump the block table + seq_len so we can resolve LOGICAL block 0.
+            let mut bt = vec![0i32; 8];
+            ctx.gpu.copy_d2h(meta.block_table, &mut bt)?;
+            let mut sl = vec![0i32; 2];
+            ctx.gpu.copy_d2h(meta.seq_len, &mut sl)?;
+            tracing::info!("MLA-DIAG block_table[0..8]={bt:?} seq_len={sl:?} slot_dump");
             let k_pool = kv_cache.k_pool_ptr(self.attn_layer_idx);
             let v_pool = kv_cache.v_pool_ptr(self.attn_layer_idx);
-            mla_diag_norm(ctx.gpu, "cache K@blk0pos0", k_pool, mla_cache_dim as usize);
-            mla_diag_norm(ctx.gpu, "cache V@blk0pos0", v_pool, mla_cache_dim as usize);
+            // Read logical position 0 = block_table[0], pos 0.
+            let phys0 = bt[0].max(0) as u64;
+            // block stride bytes per layer entry: page_stride = block_size*num_kv*hd*2
+            let block_stride = kv_cache.block_stride_bytes_for_layer(self.attn_layer_idx) as u64;
+            let k0 = DevicePtr(k_pool.0 + phys0 * block_stride);
+            let v0 = DevicePtr(v_pool.0 + phys0 * block_stride);
+            mla_diag_norm(ctx.gpu, "cache K@logical0", k0, mla_cache_dim as usize);
+            mla_diag_norm(ctx.gpu, "cache V@logical0", v0, mla_cache_dim as usize);
+            let phys1 = bt[1].max(0) as u64;
+            let k1 = DevicePtr(k_pool.0 + phys1 * block_stride);
+            let v1 = DevicePtr(v_pool.0 + phys1 * block_stride);
+            mla_diag_norm(ctx.gpu, "cache K@logical_blk1", k1, mla_cache_dim as usize);
+            mla_diag_norm(ctx.gpu, "cache V@logical_blk1", v1, mla_cache_dim as usize);
         }
 
         if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-paged_attn"); ctx.gpu.synchronize(stream)?; }
