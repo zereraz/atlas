@@ -509,12 +509,16 @@ impl TransformerModel {
             {
                 self.gpu.synchronize(stream)?;
                 let hsz = self.config.hidden_size;
+                // hidden is BF16 when use_fp32_residual=false (gb10 default).
+                let dt = if self.config.use_fp32_residual() { 4usize } else { 2 };
                 let last_start = (proc_count - 1) * hsz;
-                let mut vals = vec![0u8; hsz * 4];
-                let _ = self.gpu.copy_d2h(hidden.offset(last_start * 4), &mut vals);
-                let floats: Vec<f32> = vals.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                    .collect();
+                let mut vals = vec![0u8; hsz * dt];
+                let _ = self.gpu.copy_d2h(hidden.offset(last_start * dt), &mut vals);
+                let floats: Vec<f32> = if dt == 4 {
+                    vals.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                } else {
+                    vals.chunks_exact(2).map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); f32::from_bits((b as u32) << 16) }).collect()
+                };
                 let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
                 std::fs::create_dir_all(&dir).ok();
                 std::fs::write(std::path::Path::new(&dir).join(format!("atlas_L{i}.bin")), &bytes).ok();
