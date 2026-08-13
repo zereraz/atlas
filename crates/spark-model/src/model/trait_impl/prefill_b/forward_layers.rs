@@ -184,33 +184,6 @@ impl TransformerModel {
                 let (_, norm) = self.readback_bf16(hidden, self.config.hidden_size.min(64))?;
                 tracing::info!("L{i} hidden[0] norm={norm:.4}");
             }
-            // ATLAS_MLA_DIAG full-hidden dump for early layers: find the first
-            // layer whose hidden contains a non-finite value in ANY channel
-            // (not just ch0-63) — isolates where +inf enters the residual.
-            if std::env::var_os("ATLAS_MLA_DIAG").is_some() && i < 12 {
-                self.gpu.synchronize(stream)?;
-                let hsz = self.config.hidden_size;
-                let nt = proc_count.min(8);
-                let mut fh = vec![0u8; nt * hsz * 4];
-                let _ = self.gpu.copy_d2h(hidden, &mut fh);
-                let mut tok_report = Vec::with_capacity(nt);
-                for t in 0..nt {
-                    let row = &fh[t * hsz * 4..(t + 1) * hsz * 4];
-                    let mut mx = 0.0f32;
-                    let mut n_bad = 0usize;
-                    for ch in row.chunks_exact(4) {
-                        let v = f32::from_le_bytes([ch[0], ch[1], ch[2], ch[3]]);
-                        if !v.is_finite() {
-                            n_bad += 1;
-                        } else if v.abs() > mx {
-                            mx = v.abs();
-                        }
-                    }
-                    tok_report.push(format!("(t{t} bad={n_bad} max={mx:.3})"));
-                }
-                let lt = self.config.layer_type(i);
-                tracing::info!("DIAG-FULL L{i} ({lt:?}): {}", tok_report.join(" "));
-            }
             // Per-layer numerical-divergence dump (env-gated, zero overhead when
             // unset). `ATLAS_NEMO_DUMP=<dir>` writes the LAST token's full
             // post-layer residual-stream hidden vector for every layer as

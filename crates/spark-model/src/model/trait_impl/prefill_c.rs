@@ -479,6 +479,30 @@ impl TransformerModel {
                         anyhow::anyhow!("Two-phase prefill attention layer {i} failed: {e}")
                     })?;
             }
+            // ATLAS_MLA_DIAG: full-hidden scan for first non-finite channel.
+            if std::env::var_os("ATLAS_MLA_DIAG").is_some() && i < 12 {
+                self.gpu.synchronize(stream)?;
+                let hsz = self.config.hidden_size;
+                let nt = proc_count.min(8);
+                let mut fh = vec![0u8; nt * hsz * 4];
+                let _ = self.gpu.copy_d2h(hidden, &mut fh);
+                let mut tok_report = Vec::with_capacity(nt);
+                for t in 0..nt {
+                    let row = &fh[t * hsz * 4..(t + 1) * hsz * 4];
+                    let mut mx = 0.0f32;
+                    let mut n_bad = 0usize;
+                    for ch in row.chunks_exact(4) {
+                        let v = f32::from_le_bytes([ch[0], ch[1], ch[2], ch[3]]);
+                        if !v.is_finite() {
+                            n_bad += 1;
+                        } else if v.abs() > mx {
+                            mx = v.abs();
+                        }}
+                    tok_report.push(format!("(t{t} bad={n_bad} max={mx:.3})"));
+                }
+                let lt = self.config.layer_type(i);
+                tracing::info!("DIAG-FULL L{i} ({lt:?}): {}", tok_report.join(" "));
+            }
         }
 
         // ── 5. Update sequence state ──
