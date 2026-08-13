@@ -239,48 +239,52 @@ impl Qwen3AttentionLayer {
         eprintln!("[MLA-CS] post-rope_yarn"); ctx.gpu.synchronize(stream)?;
 
         let mla_cache_dim = kv_lora + mla_rope;
-        // Cache assembly (needed for decode regardless of path)
+        // Cache assembly (needed for decode regardless of path).
+        //
+        // ALL models (Ling AND Mistral MLA) write the ABSORBED latent format:
+        //   K cache per token: [kv_latent(512) | k_rope(64)] = mla_cache_dim=576
+        //   V cache per token: [kv_latent(512) | zeros(64)]  = mla_cache_dim=576
+        // This matches the KV-pool geometry (kv_lora_rank>0 → 1 head × 576 dims)
+        // and matches what the decode path writes each step. The prefill
+        // attention itself still uses the EXPANDED [nkv,hd] form computed below
+        // (k_contiguous/v_contiguous) — the cache and the prefill-attention
+        // buffers are independent representations.
+        //
+        // (The previous Ling arm wrote EXPANDED [nkv=32, hd=192] = 6144 elems
+        // per token into a pool sized for 1×576 — overflowing slots by 10.7×
+        // and leaving decode to read garbage. Root cause of the L5 explosion.)
         let meta = ctx.attn_metadata.expect("MLA prefill requires metadata");
         let bs = kv_cache.block_size();
         let k_cache_assembled = ctx.buffers.expert_up_out();
         let v_cache_assembled = ctx.buffers.expert_down_out();
-        // Ling (no Q compression): store EXPANDED K/V in cache so decode
-        // can read it directly without absorption. K cache: per-head [k_nope=128,
-        // k_rope=64]=192; V cache: per-head [v=128, 0-pad=64]=192.
-        if (mla.q_lora_rank as u32) == h {
-            // Compute k_contiguous/v_contiguous BEFORE writing to cache so we reuse
-            // them below after kv expansion. Move the expand+assemble block up here.
-            // (Arrives later via restructure below.)
-        } else {
-            ops::mla_cache_assemble_batched(
-                ctx.gpu,
-                self.mla_cache_assemble_batched_k,
-                kv_latent,
-                k_rope_buf,
-                k_cache_assembled,
-                v_cache_assembled,
-                n,
-                kv_lora,
-                mla_rope,
-                mla_cache_dim,
-                stream,
-            )?;
-            self.write_kv_cache(
-                ctx.gpu,
-                k_cache_assembled,
-                v_cache_assembled,
-                kv_cache,
-                meta.slot,
-                n,
-                1,
-                mla_cache_dim,
-                bs as u32,
-                mla_cache_dim,
-                mla_cache_dim,
-                stream,
-                ctx.graph_capture,
-            )?;
-        }
+        ops::mla_cache_assemble_batched(
+            ctx.gpu,
+            self.mla_cache_assemble_batched_k,
+            kv_latent,
+            k_rope_buf,
+            k_cache_assembled,
+            v_cache_assembled,
+            n,
+            kv_lora,
+            mla_rope,
+            mla_cache_dim,
+            stream,
+        )?;
+        self.write_kv_cache(
+            ctx.gpu,
+            k_cache_assembled,
+            v_cache_assembled,
+            kv_cache,
+            meta.slot,
+            n,
+            1,
+            mla_cache_dim,
+            bs as u32,
+            mla_cache_dim,
+            mla_cache_dim,
+            stream,
+            ctx.graph_capture,
+        )?;
 
         // Unabsorbed (MHA) prefill: expand K/V via wkv_b, use HDIM=128 FlashAttention
         let kv_expanded_dim = nkv * (mla_nope + mla_v_dim);
@@ -316,50 +320,10 @@ impl Qwen3AttentionLayer {
             stream,
         )?;
         eprintln!("[MLA-CS] post-mla_kv_assemble_batched"); ctx.gpu.synchronize(stream)?;
-        // Ling: write expanded K/V to cache (192/head).
-        if (mla.q_lora_rank as u32) == h {
-            // k_contiguous is [n, nq*192] with per-head [k_nope=128, k_rope=64];
-            // for cache correctly we need V padded to 192. Instead of a new pad,
-            // write K with hd=192 and reuse the same buffer location for V rows,
-            // then pad the tail in place before writing.
-            // For V, assebmle mla_kv_assemble_batched already wrote 128/head --
-            // do an quick in-place pad: shift each head's 128 visitng rows to their
-            // new 192-per-head locs within v_contiguous and zero the tails.
-            let hd_c: usize = (mla_nope + mla_rope) as usize;
-            let vd_bytes = (mla_v_dim as usize) * bf16;
-            let n_tokens = n as usize;
-            // If two-half columns: for each (token, head), V-row is at
-            // token*nq*128 + head*128, target is at token*nq*192 + head*192
-            let src_stride = (nkv as usize) * (mla_v_dim as usize);
-            let dst_stride = (nkv as usize) * hd_c;
-            let scratch_v = ctx.buffers.expert_down_out();
-            for t in 0..n_tokens {
-                for head in 0..nkv as usize {
-                    let src = v_contiguous.offset(t * src_stride * bf16 + head * vd_bytes);
-                    let dst = scratch_v.offset(t * dst_stride * bf16 + head * hd_c * bf16);
-                    ctx.gpu.copy_d2d_async(src, dst, vd_bytes, stream)?;
-                    let pad: usize = (hd_c - mla_v_dim as usize) * bf16;
-                    if pad > 0 {
-                        ctx.gpu.memset_async(dst.offset(vd_bytes), 0, pad, stream)?;
-                    }
-                }
-            }
-            self.write_kv_cache(
-                ctx.gpu,
-                k_contiguous,
-                scratch_v,
-                kv_cache,
-                meta.slot,
-                n,
-                nq,
-                hd_c as u32,
-                bs as u32,
-                (nq as usize * hd_c) as u32,
-                (nq as usize * hd_c) as u32,
-                stream,
-                ctx.graph_capture,
-            )?;
-        }
+        // NOTE: the KV cache was ALREADY written above in absorbed latent format
+        // (1 head x mla_cache_dim). k_contiguous/v_contiguous here are the
+        // EXPANDED per-head forms used ONLY by the prefill FlashAttention below
+        // — they are NOT written to the cache.
         ops::mla_q_rope_writeback_batched(
             ctx.gpu,
             self.mla_q_rope_writeback_batched_k,
