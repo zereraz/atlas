@@ -42,9 +42,20 @@ extern "C" __global__ void kda_gates(
         const float f = (float)f_raw[(unsigned long long)t * nvk + c];
         const float A = __expf(fminf(a_log[kh], 20.0f));
         const float g_in = f + dt_bias[c];
-        // softplus with +20 overflow guard (matches torch above ~20)
-        float sp = __logf(1.0f + __expf(fminf(g_in, 20.0f)));
-        float ld = -fmaxf(A * sp, lower_bound);
+        float ld;
+        if (lower_bound == 0.0f) {
+            // No lower bound: FLA non-bounded path. log-decay = -exp(A)*softplus(f+dt).
+            float sp = __logf(1.0f + __expf(fminf(g_in, 20.0f)));
+            ld = -(A * sp);
+        } else {
+            // FLA `USE_LOWER_BOUND` path (Ling / KDA with `kda_lower_bound` set):
+            // log_decay = lower_bound * sigmoid(exp(A) * (f + dt_bias)).
+            // With lower_bound negative (e.g. -5) this yields log_decay ∈
+            // (lower_bound, 0] — gated via SIGMOID, NOT softplus. Matches
+            // fla/ops/kda/gate.py kda_gate_fwd_kernel USE_LOWER_BOUND branch.
+            float x = A * g_in;
+            ld = lower_bound / (1.0f + __expf(-x));
+        }
         log_decay[(unsigned long long)t * nvk + c] = ld;
     }
     if (tid < nv) {
