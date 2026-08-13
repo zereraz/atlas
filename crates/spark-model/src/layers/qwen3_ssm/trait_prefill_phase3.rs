@@ -155,6 +155,32 @@ impl Qwen3SsmLayer {
         )?;
         self.ffn
             .forward_prefill(ctx.buffers.norm_output(), num_tokens, ctx, stream)?;
+        // L5-MoE-localization: per-token scan of the FFN/MoE continuation
+        // output BEFORE residual_add, so an exploded routed-expert position
+        // (norm 1e14) is identifiable per-position without hidden muddying it.
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && std::env::var_os("ATLAS_MLA_DIAG").is_some() && num_tokens > 1 {
+            ctx.gpu.synchronize(stream)?;
+            let bf16 = 2usize;
+            let len = num_tokens * h;
+            let mut hh = vec![0u8; len * bf16];
+            ctx.gpu.copy_d2h(ctx.buffers.moe_output(), &mut hh)?;
+            let mut per_tok = Vec::with_capacity(num_tokens);
+            for t in 0..num_tokens {
+                let row = &hh[t * h * bf16..(t + 1) * h * bf16];
+                let mut mx = 0.0f32;
+                for c in row.chunks_exact(2) {
+                    let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                    if !v.is_finite() { mx = f32::INFINITY; break; }
+                    if v.abs() > mx { mx = v.abs(); }
+                }
+                per_tok.push(mx);
+            }
+            let n_nan = per_tok.iter().filter(|v| !v.is_finite()).count();
+            tracing::info!(
+                "KDA-PHASE3 moe_output per_tok: total={num_tokens} n_nan={n_nan} per_tok_max={:?}",
+                per_tok.iter().take(24).collect::<Vec<_>>()
+            );
+        }
         ops::residual_add(
             ctx.gpu,
             self.residual_add_k,
