@@ -503,6 +503,22 @@ impl TransformerModel {
                 let lt = self.config.layer_type(i);
                 tracing::info!("DIAG-FULL L{i} ({lt:?}): {}", tok_report.join(" "));
             }
+            // ATLAS_NEMO_DUMP: write LAST token's hidden (fp32 elems) per layer.
+            if let Ok(dir) = std::env::var("ATLAS_NEMO_DUMP")
+                && !dir.is_empty()
+            {
+                self.gpu.synchronize(stream)?;
+                let hsz = self.config.hidden_size;
+                let last_start = (proc_count - 1) * hsz;
+                let mut vals = vec![0u8; hsz * 4];
+                let _ = self.gpu.copy_d2h(hidden.offset(last_start * 4), &mut vals);
+                let floats: Vec<f32> = vals.chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::create_dir_all(&dir).ok();
+                std::fs::write(std::path::Path::new(&dir).join(format!("atlas_L{i}.bin")), &bytes).ok();
+            }
         }
 
         // ── 5. Update sequence state ──
