@@ -218,6 +218,19 @@ impl Qwen3SsmLayer {
                 self.kda_lower_bound_f,
                 stream,
             )?;
+            if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
+                ctx.gpu.synchronize(stream)?;
+                let mut ld = vec![0u8; (nv * kd).min(8) * 4];
+                let _ = ctx.gpu.copy_d2h(log_decay_dst, &mut ld);
+                let v: Vec<f32> = ld.chunks_exact(4).map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+                let mut bb = vec![0u8; nv.min(8) * 4];
+                let _ = ctx.gpu.copy_d2h(gates_buf, &mut bb);
+                let bv: Vec<f32> = bb.chunks_exact(4).map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+                let mut fb0 = vec![0u8; 16];
+                let _ = ctx.gpu.copy_d2h(f_raw, &mut fb0);
+                let fv: Vec<f32> = fb0.chunks_exact(2).map(|c|{let b=u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32)<<16)}).collect();
+                tracing::info!("KDA-PH1-N{} log_decay[0..8]={:?} beta[0..8]={:?} f_raw[0..8]={:?}", num_tokens, v, bv, fv);
+            }
         } else {
             let ba_size = ctx.config.ssm_ba_size();
             ops::dense_gemm_ba_gates_prefill(
