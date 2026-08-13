@@ -117,6 +117,32 @@ impl Qwen3SsmLayer {
 
         if std::env::var_os("ATLAS_KDA_DIAG").is_some() && num_tokens > 1 {
             ctx.gpu.synchronize(stream)?;
+            // Norm/Gate/GDN raw-input sanity: print per-token norms of GDN raw,
+            // gated-normalized out, and o_proj for t=0..num_tokens.
+            let bf16 = 2usize;
+            let vdim = value_dim;
+            let read_norms = |buf: DevicePtr, elems_per_tok: usize| -> Result<Vec<f32>> {
+                let len = num_tokens * elems_per_tok;
+                let mut hh = vec![0u8; len * bf16];
+                ctx.gpu.copy_d2h(buf, &mut hh)?;
+                let mut v = Vec::with_capacity(num_tokens);
+                for t in 0..num_tokens {
+                    let row = &hh[t * elems_per_tok * bf16..(t + 1) * elems_per_tok * bf16];
+                    let mut ss = 0f64;
+                    for c in row.chunks_exact(2) {
+                        let x = half::bf16::from_le_bytes([c[0], c[1]]).to_f32() as f64;
+                        ss += x * x;
+                    }
+                    v.push(ss.sqrt() as f32);
+                }
+                Ok(v)
+            };
+            let gdn_norms = read_norms(gdn_out_chunk, vdim)?;
+            let z_norms = read_norms(z_chunk, vdim)?;
+            let normed_norms = read_norms(normed_out_buf, vdim)?;
+            tracing::info!(
+                "KDA-PH3-NORMS gdn={gdn_norms:?} z={z_norms:?} normed={normed_norms:?}",
+            );
             let bf16 = 2usize;
             let len = num_tokens * h;
             let mut hh = vec![0u8; len * bf16];
