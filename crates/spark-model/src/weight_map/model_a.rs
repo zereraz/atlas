@@ -146,7 +146,7 @@ pub(crate) fn dense_gamma_sub_one(
         c.copy_from_slice(&half::bf16::from_f32(v).to_le_bytes());
     }
     let out = gpu.alloc(n * 2)?;
-    gpu.copy_h2d(out, &buf)?;
+    gpu.copy_h2d(&buf, out)?;
     Ok(DenseWeight { weight: out })
 }
 
