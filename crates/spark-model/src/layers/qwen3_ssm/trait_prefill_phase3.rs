@@ -137,6 +137,24 @@ impl Qwen3SsmLayer {
                 }
                 Ok(v)
             };
+            if let Ok(dir) = std::env::var("ATLAS_GDN_DUMP") {
+                let len = num_tokens * vdim;
+                let mut gb = vec![0u8; len * bf16];
+                ctx.gpu.copy_d2h(gdn_out_chunk, &mut gb)?;
+                let mut floats: Vec<f32> = Vec::with_capacity(len);
+                for c in gb.chunks_exact(2) {
+                    floats.push(half::bf16::from_le_bytes([c[0], c[1]]).to_f32());
+                }
+                let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::create_dir_all(&dir).ok();
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static CTR: AtomicUsize = AtomicUsize::new(0);
+                let n = CTR.fetch_add(1, Ordering::SeqCst);
+                std::fs::write(
+                    std::path::Path::new(&dir).join(format!("kda_gdn_{}", n)),
+                    &bytes,
+                ).ok();
+            }
             let gdn_norms = read_norms(gdn_out_chunk, vdim)?;
             let z_norms = read_norms(z_chunk, vdim)?;
             let normed_norms = read_norms(normed_out_buf, vdim)?;
