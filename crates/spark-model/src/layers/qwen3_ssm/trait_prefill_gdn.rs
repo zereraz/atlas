@@ -89,7 +89,7 @@ impl Qwen3SsmLayer {
             // whether NaN enters before the recurrence or is created inside).
             {
                 let kd_ = kd; let nv_ = nv; let conv_dim_ = conv_dim;
-                let mut dump_norm = |name: &str, ptr: DevicePtr, elems_per_tok: usize, is_bf16: bool, ntok: usize| -> Result<()> {
+                let dump_norm = |name: &str, ptr: DevicePtr, elems_per_tok: usize, is_bf16: bool, ntok: usize| -> Result<()> {
                     let len = elems_per_tok * ntok;
                     let nbytes = len * if is_bf16 { 2 } else { 4 };
                     let mut h = vec![0u8; nbytes];
