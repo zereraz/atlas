@@ -415,6 +415,20 @@ impl TransformerModel {
             total_len: proc_count,
         };
 
+        if std::env::var_os("ATLAS_NEMO_DUMP").is_some() {
+            self.gpu.synchronize(stream)?;
+            let hsz = self.config.hidden_size;
+            let dt = if self.config.use_fp32_residual() { 4usize } else { 2 };
+            let mut vals = vec![0u8; hsz * dt];
+            let _ = self.gpu.copy_d2h(hidden.offset((proc_count - 1) * hsz * dt), &mut vals);
+            let floats: Vec<f32> = if dt == 4 {
+                vals.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+            } else {
+                vals.chunks_exact(2).map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); f32::from_bits((b as u32) << 16) }).collect()
+            };
+            let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(std::path::Path::new(&std::env::var("ATLAS_NEMO_DUMP").unwrap()).join("atlas_embed.bin"), &bytes).ok();
+        }
         for (i, layer) in self.layers.iter().enumerate() {
             if layer.is_ssm_layer() {
                 // Phase 1: chunked projections → GDN input buffers.
