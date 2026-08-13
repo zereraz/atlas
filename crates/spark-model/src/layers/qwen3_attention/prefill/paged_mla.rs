@@ -268,6 +268,33 @@ impl Qwen3AttentionLayer {
             stream,
         )?;
         sync!("mla_cache_assemble_batched");
+
+        if std::env::var_os("ATLAS_MLA_DIAG").is_some()
+            && std::env::var_os("ATLAS_KDA_DIAG").is_some()
+        {
+            ctx.gpu.synchronize(stream)?;
+            let nr = |gpu: &dyn spark_runtime::gpu::GpuBackend, tag: &str, ptr: spark_runtime::gpu::DevicePtr, len: usize| -> anyhow::Result<()> {
+                let mut h = vec![0u8; len * 2];
+                gpu.copy_d2h(ptr, &mut h)?;
+                let mut s2 = 0.0f64;
+                let mut mx = 0.0f32;
+                for c in h.chunks_exact(2) {
+                    let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                    s2 += (v as f64) * (v as f64);
+                    if v.abs() > mx {
+                        mx = v.abs();
+                    }
+                }
+                tracing::info!("PREFILL-MLA {tag}: len={len} norm={:.4e} max_abs={:.4e}", s2.sqrt(), mx);
+                Ok(())
+            };
+            if self.attn_layer_idx == 5 {
+                let n_l = (n as usize) * (kv_lora as usize);
+                nr(ctx.gpu, "kv_latent(normed)", kv_latent, n_l)?;
+                let n_r = (n as usize) * (mla_rope as usize);
+                nr(ctx.gpu, "k_rope(rope'd)", k_rope_buf, n_r)?;
+            }
+        }
         let meta = ctx.attn_metadata.expect("MLA prefill requires slot info");
         self.write_kv_cache(
             ctx.gpu,
