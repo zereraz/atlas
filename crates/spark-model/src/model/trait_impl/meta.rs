@@ -232,6 +232,26 @@ impl TransformerModel {
         self.gpu.copy_d2h(out_ptr, &mut buf)?;
         let gpu_token = u32::from_le_bytes(buf);
 
+        // DIAG: dump top-5 logits for comparison against vLLM reference.
+        if std::env::var_os("ATLAS_LOGITS_DIAG").is_some() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let step = COUNTER.fetch_add(1, Ordering::SeqCst);
+            let v = self.config.vocab_size;
+            let mut logits_buf = vec![0u8; v * 2];
+            if self.gpu.copy_d2h(logits_ptr, &mut logits_buf).is_ok() {
+                let mut vals: Vec<(usize, f32)> = (0..v)
+                    .map(|i| {
+                        let bits = u16::from_le_bytes([logits_buf[i * 2], logits_buf[i * 2 + 1]]);
+                        (i, f32::from_bits((bits as u32) << 16))
+                    })
+                    .collect();
+                vals.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                let top5: Vec<(u32, f32)> = vals.iter().take(5).map(|(i, x)| (*i as u32, *x)).collect();
+                tracing::info!("LOGITS-DIAG step={} argmax={} top5={:?}", step, gpu_token, top5);
+            }
+        }
+
         Ok(gpu_token)
     }
 
