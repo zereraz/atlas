@@ -435,22 +435,6 @@ impl Qwen3AttentionLayer {
                     per_tok[t] = mx;
                 }
                 tracing::info!("PREFILL-MLA normed per-token max_abs: {:?}", per_tok);
-                // ALSO decode the same bytes as FP32 — the DIAG decode-path
-                // uses readback_f32; if prefill normed is really FP32 the bf16
-                // view would look like inf. Disambiguate here.
-                let mut per_tok_f32: Vec<f32> = Vec::with_capacity(n as usize);
-                for t in 0..n as usize {
-                    let base = t * (h as usize);
-                    let row_f32 = &hh[base * 4..(base + (h as usize)) * 4];
-                    let mut mx = 0.0f32;
-                    for c in row_f32.chunks_exact(4) {
-                        let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-                        if !v.is_finite() { mx = f32::INFINITY; break; }
-                        if v.abs() > mx { mx = v.abs(); }
-                    }
-                    per_tok_f32.push(mx);
-                }
-                tracing::info!("PREFILL-MLA normed AS-FP32 per-token max_abs: {:?}", per_tok_f32);
             }
 
             // Per-token scan of attn_out_fb (prefill_attention_64 out) AND the
