@@ -519,11 +519,16 @@ impl TransformerModel {
                     let floats: Vec<f32> = vals.chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
-                    let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
-                    std::fs::create_dir_all(&dir).ok();
-                    std::fs::write(std::path::Path::new(&dir).join(format!("atlas_L{i}.bin")), &bytes).ok();
-                    if i + 1 == self.layers.len() {
-                        DUMP_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Skip warmup/empty prefill (all-zero hidden): only latch
+                    // once a request produces a non-trivial hidden state.
+                    let abs_sum: f32 = floats.iter().map(|v| v.abs()).sum();
+                    if abs_sum > 1e-3 {
+                        let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        std::fs::create_dir_all(&dir).ok();
+                        std::fs::write(std::path::Path::new(&dir).join(format!("atlas_L{i}.bin")), &bytes).ok();
+                        if i + 1 == self.layers.len() {
+                            DUMP_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
                 }
             }
