@@ -436,6 +436,27 @@ impl Qwen3AttentionLayer {
                 }
                 tracing::info!("PREFILL-MLA normed per-token max_abs: {:?}", per_tok);
             }
+
+            // Per-token scan of attn_out_fb (prefill_attention_64 out) AND the
+            // wo-projected residual add result in hidden.
+            {
+                let nn = (n as usize) * (nq as usize) * (mla_v_dim as usize);
+                let mut hh = vec![0u8; nn * 2];
+                ctx.gpu.copy_d2h(attn_out_fb, &mut hh)?;
+                let mut per_tok: Vec<f32> = Vec::with_capacity(n as usize);
+                for t in 0..n as usize {
+                    let base = t * (nq as usize) * (mla_v_dim as usize);
+                    let row = &hh[base * 2..(base + (nq as usize) * (mla_v_dim as usize)) * 2];
+                    let mut mx = 0.0f32;
+                    for c in row.chunks_exact(2) {
+                        let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                        if !v.is_finite() { mx = f32::INFINITY; break; }
+                        if v.abs() > mx { mx = v.abs(); }
+                    }
+                    per_tok.push(mx);
+                }
+                tracing::info!("PREFILL-MLA attn_out_fb per-token max_abs: {:?}", per_tok);
+            }
         }
 
         // wo projection — output to qkv_output (norm_output aliases downstream).
