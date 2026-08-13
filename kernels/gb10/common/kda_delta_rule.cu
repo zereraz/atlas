@@ -96,7 +96,10 @@ extern "C" __global__ void kda_delta_rule_decode_f32(
            + H[j + 3] * (float)q_ptr[j + 3];
     }
 
-    output[((unsigned long long)b * num_v_heads + vh) * v_dim + tid] = o;
+    // FLA scale: q is multiplied by 1/sqrt(k_dim) before the * o step
+    // (fla/ops/kda/naive.py; vLLM fused_recurrent applies it via `scale`).
+    output[((unsigned long long)b * num_v_heads + vh) * v_dim + tid] =
+        o * rsqrtf((float)k_dim);
 }
 
 // ============================================================================
@@ -164,7 +167,8 @@ extern "C" __global__ void kda_delta_rule_decode_f32_inputs(
            + H[j + 3] * q_ptr[j + 3];
     }
 
-    output[((unsigned long long)b * num_v_heads + vh) * v_dim + tid] = o;
+    output[((unsigned long long)b * num_v_heads + vh) * v_dim + tid] =
+        o * rsqrtf((float)k_dim);
 }
 
 // ============================================================================
@@ -254,8 +258,9 @@ extern "C" __global__ void kda_delta_rule_prefill(
                 Hv[j + 3] += v_new * smem_k[j + 3];
                 o += Hv[j + 0] * q0 + Hv[j + 1] * q1 + Hv[j + 2] * q2 + Hv[j + 3] * q3;
             }
+            // FLA scale: q multiplied by 1/sqrt(k_dim).
             output[(((unsigned long long)b * seq_len + t) * num_v_heads + vh) * v_dim + tid] =
-                __float2bfloat16(o);
+                __float2bfloat16(o * rsqrtf((float)k_dim));
         }
         __syncthreads();
     }
