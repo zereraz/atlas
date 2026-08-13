@@ -82,6 +82,33 @@ impl Qwen3SsmLayer {
             )?;
             offset += chunk;
         }
+
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some()
+            && std::env::var_os("ATLAS_MLA_DIAG").is_some()
+        {
+            ctx.gpu.synchronize(stream)?;
+            let bf16 = 2usize;
+            let len = total * value_dim;
+            let mut hh = vec![0u8; len * bf16];
+            ctx.gpu.copy_d2h(gdn_bufs.output, &mut hh)?;
+            let mut per_tok = Vec::with_capacity(total);
+            for t in 0..total {
+                let row = &hh[t * value_dim * bf16..(t + 1) * value_dim * bf16];
+                let mut mx = 0.0f32;
+                for c in row.chunks_exact(2) {
+                    let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                    if !v.is_finite() { mx = f32::INFINITY; break; }
+                    if v.abs() > mx { mx = v.abs(); }
+                }
+                per_tok.push(mx);
+            }
+            let n_nan = per_tok.iter().filter(|v| !v.is_finite()).count();
+            tracing::info!(
+                "KDA-PREFILL-L{} recurrence out: total={total} nv={nv} vd={vd} n_nan={n_nan} per_tok_max={:?}",
+                super::debug::SSM_LAYER_CALL_COUNTER.load(std::sync::atomic::Ordering::Relaxed),
+                per_tok.iter().take(24).collect::<Vec<_>>()
+            );
+        }
         Ok(())
     }
 
