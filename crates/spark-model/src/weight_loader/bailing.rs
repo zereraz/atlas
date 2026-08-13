@@ -19,8 +19,8 @@ use super::ModelWeightLoader;
 use crate::layer::TransformerLayer;
 use crate::layers::{DenseFfnLayer, FfnComponent, MoeLayer, Qwen3SsmLayer};
 use crate::weight_map::{
-    DenseWeight, MtpWeights, SsmWeights, dense, detect_nvfp4_variant, gpu_concat_rows,
-    load_dense_ffn, load_moe_bailing, load_mtp, load_ssm_bailing,
+    DenseWeight, MtpWeights, SsmWeights, dense, dense_gamma_sub_one, detect_nvfp4_variant,
+    gpu_concat_rows, load_dense_ffn, load_moe_bailing, load_mtp, load_ssm_bailing,
     quantize_to_nvfp4,
 };
 
@@ -74,8 +74,21 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
         for (i, lt) in layer_types.iter().enumerate() {
             let lp = config.layer_prefix(i);
             tracing::warn!("Ling[{i}] build start (type={lt:?})");
-            let input_norm = dense(store, &format!("{lp}.input_layernorm.weight"))?;
-            let post_attn_norm = dense(store, &format!("{lp}.post_attention_layernorm.weight"))?;
+            // Ling RMSNorm stores TRUE gamma in the checkpoint (standard RMSNorm,
+            // `out = x * rms * w`), but atlas norm kernels follow Qwen3-Next's
+            // offset convention (`out = x * rms * (1 + w)`). Subtract 1.0 at load
+            // so the atlas kernels reproduce the reference RMSNorm. Matches
+            // `weight = gamma - 1` convention used by Qwen3-Next checkpts.
+            let input_norm = dense_gamma_sub_one(
+                store,
+                &format!("{lp}.input_layernorm.weight"),
+                gpu,
+            )?;
+            let post_attn_norm = dense_gamma_sub_one(
+                store,
+                &format!("{lp}.post_attention_layernorm.weight"),
+                gpu,
+            )?;
 
             // Ling: layers < first_k_dense_replace (=2) use a dense SwiGLU FFN
             // (`mlp.gate_proj/up_proj/down_proj`, BF16 in ignore list), the rest
@@ -173,10 +186,10 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
         &self,
         store: &WeightStore,
         config: &ModelConfig,
-        _gpu: &dyn GpuBackend,
+        gpu: &dyn GpuBackend,
     ) -> Result<DenseWeight> {
         let prefix = &config.weight_prefix;
-        dense(store, &format!("{prefix}.norm.weight"))
+        dense_gamma_sub_one(store, &format!("{prefix}.norm.weight"), gpu)
             .map_err(|e| anyhow::anyhow!("Ling final norm not found ({e:#})"))
     }
 
@@ -344,7 +357,8 @@ fn build_full_attention_bailing(
     let q_proj = dense(store, &format!("{p}.q_proj.weight"))?; // [6144, 2560]
     let kv_a = dense(store, &format!("{p}.kv_a_proj_with_mqa.weight"))?; // [576, 2560]
     let kv_b = dense(store, &format!("{p}.kv_b_proj.weight"))?; // [32*(128+128), 512]
-    let kv_a_norm = dense(store, &format!("{p}.kv_a_layernorm.weight"))?; // [512]
+    // kv_a_norm runs through the (1+w) `rms_norm` kernel → gamma - 1.
+    let kv_a_norm = dense_gamma_sub_one(store, &format!("{p}.kv_a_layernorm.weight"), gpu)?; // [512]
     let o_dense = dense(store, &format!("{p}.dense.weight"))?; // [2560, 4096]
     let g_proj = dense(store, &format!("{p}.g_proj.weight"))?; // [2560, 5120] (output gate)
 

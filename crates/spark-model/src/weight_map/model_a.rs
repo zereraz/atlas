@@ -123,6 +123,33 @@ pub(crate) fn dense(store: &WeightStore, name: &str) -> Result<DenseWeight> {
     Ok(DenseWeight { weight: w.ptr })
 }
 
+/// Load a dense weight, subtracting 1.0 from every element (BF16 round-trip).
+///
+/// Atlas norm kernels use the Qwen3-Next `(1 + w)` offset convention: they
+/// compute `out = x * rms * (1 + w)`. Models that store true gamma directly
+/// (e.g. Ling / Bailing, standard RMSNorm) must therefore pass `w - 1` so the
+/// kernel's `(1 + (w-1)) = w` reproduces the reference RMSNorm. We do the one
+/// subtraction here at load time: read gamma → CPU → `w - 1` → re-upload to a
+/// NEW GPU buffer. The original store buffer is left alone.
+pub(crate) fn dense_gamma_sub_one(
+    store: &WeightStore,
+    name: &str,
+    gpu: &dyn GpuBackend,
+) -> Result<DenseWeight> {
+    let w = store.get(name)?;
+    let n = w.num_elements();
+    let mut buf = vec![0u8; n * 2];
+    gpu.copy_d2h(w.ptr, &mut buf)?;
+    for c in buf.chunks_exact_mut(2) {
+        let bits = u16::from_le_bytes([c[0], c[1]]);
+        let v = half::bf16::from_bits(bits).to_f32() - 1.0f32;
+        c.copy_from_slice(&half::bf16::from_f32(v).to_le_bytes());
+    }
+    let out = gpu.alloc(n * 2)?;
+    gpu.copy_h2d(out, &buf)?;
+    Ok(DenseWeight { weight: out })
+}
+
 /// Load a weight, auto-dequanting FP8 block-scaled to BF16 when needed.
 ///
 /// Used for models with mixed-precision layers — Qwen3.6's ViT, for
