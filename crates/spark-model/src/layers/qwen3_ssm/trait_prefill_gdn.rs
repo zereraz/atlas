@@ -83,10 +83,52 @@ impl Qwen3SsmLayer {
             offset += chunk;
         }
 
-        if std::env::var_os("ATLAS_KDA_DIAG").is_some()
-            && std::env::var_os("ATLAS_MLA_DIAG").is_some()
-        {
+        if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
             ctx.gpu.synchronize(stream)?;
+            // Dump q/k/v/log_decay/beta INPUT norms for first tokens (find
+            // whether NaN enters before the recurrence or is created inside).
+            {
+                let kd_ = kd; let nv_ = nv; let conv_dim_ = conv_dim;
+                let mut dump_norm = |name: &str, ptr: DevicePtr, elems_per_tok: usize, is_bf16: bool, ntok: usize| -> Result<()> {
+                    let len = elems_per_tok * ntok;
+                    let nbytes = len * if is_bf16 { 2 } else { 4 };
+                    let mut h = vec![0u8; nbytes];
+                    ctx.gpu.copy_d2h(ptr, &mut h)?;
+                    let mut tok_max = Vec::with_capacity(ntok);
+                    for t in 0..ntok {
+                        let row_off = t * elems_per_tok * if is_bf16 { 2 } else { 4 };
+                        let row = &h[row_off..row_off + elems_per_tok * if is_bf16 { 2 } else { 4 }];
+                        let mut mx = 0.0f32; let mut nan = false;
+                        if is_bf16 {
+                            for c in row.chunks_exact(2) {
+                                let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                                if !v.is_finite() { nan = true; break; }
+                                if v.abs() > mx { mx = v.abs(); }
+                            }
+                        } else {
+                            for c in row.chunks_exact(4) {
+                                let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                                if !v.is_finite() { nan = true; break; }
+                                if v.abs() > mx { mx = v.abs(); }
+                            }
+                        }
+                        tok_max.push(if nan { f32::INFINITY } else { mx });
+                    }
+                    let n_nan = tok_max.iter().filter(|v| !v.is_finite()).count();
+                    tracing::info!("KDA-IN {name}: ntok={ntok} ept={elems_per_tok} n_nan={n_nan} tok_max={:?}", &tok_max[..tok_max.len().min(12)]);
+                    Ok(())
+                };
+                let ntok = total.min(8);
+                // q/k/v are per-token conv_dim-strided, not contiguous per-token in this packed layout
+                // so dump just the first head-dim section: first kd elems of qtok row t at offset t*conv_dim
+                for t in 0..ntok {
+                    dump_norm("q", q_ptr.offset(t * conv_dim_ * 2), kd_, true, 1)?;
+                    dump_norm("k", k_ptr.offset(t * conv_dim_ * 2), kd_, true, 1)?;
+                }
+                dump_norm("v", v_ptr, vd, true, 1)?;
+                dump_norm("log_decay", log_decay, nv_ * kd_, false, ntok)?;
+                dump_norm("beta", beta, nv_, false, ntok)?;
+            }
             let bf16 = 2usize;
             let len = total * value_dim;
             let mut hh = vec![0u8; len * bf16];
