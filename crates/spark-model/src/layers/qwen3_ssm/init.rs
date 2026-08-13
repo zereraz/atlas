@@ -41,8 +41,18 @@ impl Qwen3SsmLayer {
             } else {
                 gpu.kernel("norm", "rms_norm_residual")?
             },
-            gated_rms_norm_k: gpu.kernel("norm", "gated_rms_norm")?,
-            gated_rms_norm_f32_k: super::super::try_kernel(gpu, "norm", "gated_rms_norm_f32_input"),
+            gated_rms_norm_k: if config.ssm_per_channel_gates {
+                // KDA (Ling): out = rms_norm(x) * sigmoid(gate) — NOT SiLU.
+                gpu.kernel("norm", "kda_gated_rms_norm")?
+            } else {
+                // GDN (Qwen3-Next): out = rms_norm(x) * SiLU(gate).
+                gpu.kernel("norm", "gated_rms_norm")?
+            },
+            gated_rms_norm_f32_k: if config.ssm_per_channel_gates {
+                super::super::try_kernel(gpu, "norm", "kda_gated_rms_norm_f32_input")
+            } else {
+                super::super::try_kernel(gpu, "norm", "gated_rms_norm_f32_input")
+            },
             dense_gemv_k: gpu.kernel("gemv", "dense_gemv_bf16")?,
             w4a16_gemv_k: gpu.kernel("w4a16_gemv", "w4a16_gemv")?,
             w8a16_gemv_k: gpu.kernel("w8a16_gemv", "w8a16_gemv")?,
@@ -92,7 +102,11 @@ impl Qwen3SsmLayer {
             } else {
                 gpu.kernel("norm", "residual_add_rms_norm")?
             },
-            gated_rms_norm_prefill_k: gpu.kernel("norm", "gated_rms_norm_prefill")?,
+            gated_rms_norm_prefill_k: if config.ssm_per_channel_gates {
+                gpu.kernel("norm", "kda_gated_rms_norm_prefill")?
+            } else {
+                gpu.kernel("norm", "gated_rms_norm_prefill")?
+            },
             w4a16_gemm_k: gpu.kernel("w4a16", "w4a16_gemm")?,
             w4a16_gemm_t_k: gpu.kernel("w4a16", "w4a16_gemm_t")?,
             w4a16_gemm_t_k64_k: gpu.kernel("w4a16", "w4a16_gemm_t_k64")?,
