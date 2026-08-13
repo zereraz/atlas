@@ -416,6 +416,26 @@ impl Qwen3AttentionLayer {
             dump("k_contiguous", k_contiguous, (n as usize) * (nq as usize) * (hd as usize))?;
             dump("q_full(qg_out)", qg_out, (n as usize) * (nq as usize) * (hd as usize))?;
             dump("normed", normed, (n as usize) * (h as usize))?;
+
+            // Per-token max_abs scan: find which token positions are NaN/huge.
+            {
+                let len = (n as usize) * (h as usize);
+                let mut hh = vec![0u8; len * 2];
+                ctx.gpu.copy_d2h(normed, &mut hh)?;
+                let mut per_tok: Vec<f32> = vec![0.0; n as usize];
+                for t in 0..n as usize {
+                    let base = t * h as usize;
+                    let row = &hh[base * 2..(base + h as usize) * 2];
+                    let mut mx = 0.0f32;
+                    for c in row.chunks_exact(2) {
+                        let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                        if !v.is_finite() { mx = f32::INFINITY; break; }
+                        if v.abs() > mx { mx = v.abs(); }
+                    }
+                    per_tok[t] = mx;
+                }
+                tracing::info!("PREFILL-MLA normed per-token max_abs: {:?}", per_tok);
+            }
         }
 
         // wo projection — output to qkv_output (norm_output aliases downstream).
