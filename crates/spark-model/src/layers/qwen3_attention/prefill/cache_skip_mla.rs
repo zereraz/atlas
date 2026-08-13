@@ -394,6 +394,30 @@ impl Qwen3AttentionLayer {
         )
         .map_err(|e| anyhow::anyhow!("MLA flash_attn_64 fallback: {e}"))?;
         eprintln!("[MLA-CS] post-prefill_attention_64"); ctx.gpu.synchronize(stream)?;
+        if std::env::var_os("ATLAS_MLA_DIAG").is_some() && self.attn_layer_idx == 5 {
+            ctx.gpu.synchronize(stream)?;
+            let dump = |tag: &str, ptr: DevicePtr, len: usize| -> anyhow::Result<()> {
+                let mut hh = vec![0u8; len * 2];
+                ctx.gpu.copy_d2h(ptr, &mut hh)?;
+                let mut s2 = 0.0f64;
+                let mut mx = 0.0f32;
+                let mut first = [0.0f32; 4];
+                for (i, c) in hh.chunks_exact(2).enumerate() {
+                    let v = half::bf16::from_le_bytes([c[0], c[1]]).to_f32();
+                    s2 += (v as f64) * (v as f64);
+                    if v.abs() > mx { mx = v.abs(); }
+                    if i < 4 { first[i] = v; }
+                }
+                tracing::info!("PREFILL-MLA {tag}: len={len} norm={:.4e} max_abs={:.4e} first4={:?}", s2.sqrt(), mx, first);
+                Ok(())
+            };
+            dump("kv_latent(normed)", kv_latent, (n as usize) * (kv_lora as usize))?;
+            dump("k_rope(rope'd)", k_rope_buf, (n as usize) * (mla_rope as usize))?;
+            dump("k_contiguous", k_contiguous, (n as usize) * (nq as usize) * (hd as usize))?;
+            dump("q_full(qg_out)", qg_out, (n as usize) * (nq as usize) * (hd as usize))?;
+            dump("normed", normed, (n as usize) * (h as usize))?;
+        }
+
         // wo projection — output to qkv_output (norm_output aliases downstream).
         // Ling: Q/K head_dim is the composite 192 (nope+rope) but V heads are
         // v_dim=128 wide, so the attention output buffer is [n, nq*v_dim] and
