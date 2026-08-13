@@ -427,7 +427,9 @@ impl TransformerModel {
                 vals.chunks_exact(2).map(|c| { let b = u16::from_le_bytes([c[0], c[1]]); f32::from_bits((b as u32) << 16) }).collect()
             };
             let bytes: Vec<u8> = floats.iter().flat_map(|v| v.to_le_bytes()).collect();
-            std::fs::write(std::path::Path::new(&std::env::var("ATLAS_NEMO_DUMP").unwrap()).join("atlas_embed.bin"), &bytes).ok();
+            let dir = std::env::var("ATLAS_NEMO_DUMP").unwrap();
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(std::path::Path::new(&dir).join("atlas_embed.bin"), &bytes).ok();
         }
         for (i, layer) in self.layers.iter().enumerate() {
             if layer.is_ssm_layer() {
