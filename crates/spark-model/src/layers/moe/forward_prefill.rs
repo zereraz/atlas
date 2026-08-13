@@ -185,7 +185,10 @@ impl MoeLayer {
                     num_experts,
                     top_k,
                     ctx.config.norm_topk_prob,
-                    1.0,
+                    // Ling `routed_scaling_factor` (2.5) — matches decode's
+                    // moe_weighted_sum_blend which applies it to the routed sum.
+                    // (Used to be 1.0 here → prefill invisible-routed-scaling bug.)
+                    ctx.config.routed_scaling_factor as f32,
                     n,
                     stream,
                 )?;
@@ -206,7 +209,7 @@ impl MoeLayer {
                         num_experts,
                         top_k,
                         ctx.config.norm_topk_prob,
-                        1.0,
+                        ctx.config.routed_scaling_factor as f32,
                         stream,
                     )?;
                 }
