@@ -89,7 +89,10 @@ impl Qwen3SsmLayer {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
             static CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            let idx = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // h_state dump mirrors the phase1 `SSM_CALL` counter: this fires
+            // once per SSM layer per prefill. The phase1 counter resets to 0 on
+            // process restart — we use a modulo so repeated calls wrap cleanly.
+            let idx = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx.to_string()) {
                 let bytes = nv * kd * vd * fp32;
                 let mut buf = vec![0u8; bytes];

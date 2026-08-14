@@ -322,6 +322,22 @@ impl Qwen3SsmLayer {
         let qkv_dst = gdn_bufs.qkv.offset(token_offset * conv_dim * bf16);
         ctx.gpu
             .copy_d2d_async(conv_out_buf, qkv_dst, num_tokens * conv_dim * bf16, stream)?;
+        // ATLAS_GDN_DUMP: post-L2 packed qkv as FEED TO kda_delta_rule_prefill.
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
+            // Reuse the same SSM_CALL counter index as the post_conv dump:
+            // the SECOND call to fetch_add for the same stage returns the NEXT
+            // layer's idx — not what we want. Subtract 1 so both dumps for the
+            // same prefill share the same layer idx.
+            let idx8 = SSM_CALL.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1) % 36;
+            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx8.to_string()) {
+                let mut buf8 = vec![0u8; num_tokens * conv_dim * bf16];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(conv_out_buf, &mut buf8)?;
+                std::fs::write(format!("{}/post_l2_qkv_L{idx8}.bin", dir), &buf8).ok();
+            }
+        }
 
         // Gate/beta: gates_buf [num_tokens, 2*nv] FP32 → gdn_bufs.gate_beta at token_offset
         // Contiguous copy: both layouts are [N, 2*nv] FP32.
