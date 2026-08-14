@@ -83,6 +83,21 @@ impl Qwen3SsmLayer {
             offset += chunk;
         }
 
+        // ATLAS_GDN_DUMP: dump h_state post-recurrence (fp32 [nv, kd, vd]) for
+        // direct cos-vs-torch diff of the recurrence core.
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
+            static CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let idx = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx.to_string()) {
+                let bytes = nv * kd * vd * fp32;
+                let mut buf = vec![0u8; bytes];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(ssm_state.h_state, &mut buf)?;
+                std::fs::write(format!("{}/h_state_L{idx}.bin", dir), &buf).ok();
+            }
+        }
         if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
             ctx.gpu.synchronize(stream)?;
             // Dump q/k/v/log_decay/beta INPUT norms for first tokens (find
