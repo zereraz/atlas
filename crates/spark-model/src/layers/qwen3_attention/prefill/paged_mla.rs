@@ -46,7 +46,7 @@ impl Qwen3AttentionLayer {
             h,
             nq,
             nkv,
-            hd,
+            hd: _,
             kv_dim,
             eps,
             bf16,
@@ -79,6 +79,10 @@ impl Qwen3AttentionLayer {
         let mla_nope = mla.nope as u32;
         let mla_v_dim = mla.v_dim as u32;
         let mla_rope = mla.rope as u32;
+        // CRITICAL: MLA per-head q/k dim = qk_nope + qk_rope (Ling: 128+64=192).
+        // `ctx.config.head_dim` is 128 (only qk_nope) — using it for YOffs
+        // makes every stride wrong on the expanded q/k/v buffers.
+        let hd = mla_nope + mla_rope;
 
         // Q: latent → norm → expand → [N, nq*hd] in [nope|rope] per head
         let q_latent = ctx.buffers.ssm_ba();
@@ -110,7 +114,13 @@ impl Qwen3AttentionLayer {
             )?;
         }
         sync!("rms_norm");
-        let qg_out = ctx.buffers.qkv_output();
+        // For MLA-expanded Q in Ling (nq*(nope+rope)=32*192=6144 per token),
+        // qkv_output (sized as nq*hd(gated)*2 + 2*kv*hd) is too small when
+        // attn_gated=false. norm_output is sized max_dim(=h)=2560; we need
+        // 6144 per token. Allocate from attn_output: it's sized for the
+        // absorbed-MLA path (nq*(kv_lora+rope) = 32*576=18432) and is
+        // otherwise unused until after w_o — safe scratch here.
+        let qg_out = ctx.buffers.attn_output();
         ops::dense_gemm(
             ctx.gpu,
             self.dense_gemm_k,
