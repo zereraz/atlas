@@ -14,6 +14,7 @@ use crate::layer::ForwardContext;
 use crate::layers::ops;
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // `hd` is shadowed by mla_nope+mla_rope inside for correctness
 pub(super) struct CacheSkipMlaArgs {
     pub normed: DevicePtr,
     pub num_tokens: usize,
