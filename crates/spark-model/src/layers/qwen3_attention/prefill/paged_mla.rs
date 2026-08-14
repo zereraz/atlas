@@ -21,6 +21,7 @@ pub(super) struct MlaPrefillArgs {
     pub h: u32,
     pub nq: u32,
     pub nkv: u32,
+    #[allow(dead_code)] // read via mla.* at call site (MLA-expanded hd = nope+rope)
     pub hd: u32,
     pub kv_dim: usize,
     pub eps: f32,
