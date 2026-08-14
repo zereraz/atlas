@@ -331,7 +331,9 @@ impl Qwen3AttentionLayer {
         // generic HDIM=256 build reads a 64-wide garbage tail into every
         // dot-product contribution.
         let prefill_k = if hd == 192 {
-            crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_h192")
+            let k = crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_h192");
+            eprintln!("[MLA] hd=192 using kernel_handle={} (non-zero = h192 build)", k.0);
+            k
         } else if hd > 256 && self.prefill_attn_512_k.0 != 0 {
             self.prefill_attn_512_k
         } else {
