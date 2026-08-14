@@ -286,20 +286,24 @@ impl Qwen3SsmLayer {
         )?;
 
         // ATLAS_GDN_DUMP: post-conv1d+silu, pre-L2norm (oracle diff point)
-        {
+        let ssm_layer_idx = {
             static SSM_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            let ssm_layer_idx = SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        };
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
-            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == ssm_layer_idx.to_string()) {
+            let li = ssm_layer_idx % 36;
+            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == li.to_string()) {
                 let mut buf = vec![0u8; num_tokens * conv_dim * 2];
                 ctx.gpu.synchronize(stream)?;
                 ctx.gpu.copy_d2h(conv_out_buf, &mut buf)?;
-                let p = format!("{}/post_conv_L{ssm_layer_idx}.bin", dir);
+                let p = format!("{}/post_conv_L{li}.bin", dir);
                 std::fs::write(&p, &buf).ok();
                 let mut buf2 = vec![0u8; num_tokens * qkvz_size * 2];
                 ctx.gpu.copy_d2h(deinterleaved, &mut buf2)?;
-                let p2 = format!("{}/pre_conv_L{ssm_layer_idx}.bin", dir);
+                let p2 = format!("{}/pre_conv_L{li}.bin", dir);
                 std::fs::write(&p2, &buf2).ok();
             }
         }
@@ -326,11 +330,7 @@ impl Qwen3SsmLayer {
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
-            // Reuse the same SSM_CALL counter index as the post_conv dump:
-            // the SECOND call to fetch_add for the same stage returns the NEXT
-            // layer's idx — not what we want. Subtract 1 so both dumps for the
-            // same prefill share the same layer idx.
-            let idx8 = SSM_CALL.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1) % 36;
+            let idx8 = ssm_layer_idx % 36;
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx8.to_string()) {
                 let mut buf8 = vec![0u8; num_tokens * conv_dim * bf16];
                 ctx.gpu.synchronize(stream)?;
