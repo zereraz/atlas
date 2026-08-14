@@ -90,6 +90,21 @@ impl Qwen3SsmLayer {
             .map_err(|e| {
                 anyhow::anyhow!("ssm phase1: QKVZ FP8 GEMM failed (M={k}, N={qkvz_size}): {e}")
             })?;
+        } else if std::env::var("ATLAS_DENSE_QKVZ").ok().as_deref() == Some("1") {
+            // Correctness probe: bypass NVFP4 (which HF never quantizes for
+            // Ling) and run the KDA QKVZ GEMM in BF16 to isolate quant noise
+            // from logic error during layer-diff vs FLA oracle.
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm_k,
+                normed,
+                &self.ssm.in_proj_qkvz,
+                proj_dst,
+                k,
+                qkvz_size as u32,
+                h as u32,
+                stream,
+            )?;
         } else if let Some(ref nvfp4_t) = self.qkvz_nvfp4_t {
             if k > 128 {
                 ops::w4a16_gemm_n128_m128(

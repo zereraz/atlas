@@ -50,7 +50,35 @@ impl Qwen3SsmLayer {
 
         // ── 10. Output projection GEMM: [N, 4096] × [4096, 2048] → [N, 2048] ──
         let out_proj_buf = ctx.buffers.moe_output();
-        if let Some(ref dense_out) = self.out_proj_dense {
+        let use_dense_out = std::env::var("ATLAS_DENSE_QKVZ").ok().as_deref() == Some("1");
+        if use_dense_out {
+            if let Some(ref dense_out) = self.out_proj_dense {
+                ops::dense_gemm(
+                    ctx.gpu,
+                    self.dense_gemm_k,
+                    normed_out_buf,
+                    dense_out,
+                    out_proj_buf,
+                    k,
+                    h as u32,
+                    value_dim as u32,
+                    stream,
+                )
+            } else {
+                // Env set but no dense fallback installed: fall through to NVFP4.
+                ops::w4a16_gemm_n128(
+                    ctx.gpu,
+                    self.w4a16_gemm_t_k,
+                    normed_out_buf,
+                    self.out_proj_nvfp4_t.as_ref().unwrap(),
+                    out_proj_buf,
+                    k,
+                    h as u32,
+                    value_dim as u32,
+                    stream,
+                )
+            }
+        } else if let Some(ref dense_out) = self.out_proj_dense {
             ops::dense_gemm(
                 ctx.gpu,
                 self.dense_gemm_k,

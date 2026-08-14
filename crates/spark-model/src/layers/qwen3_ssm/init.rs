@@ -244,6 +244,13 @@ impl Qwen3SsmLayer {
         Ok(layer)
     }
 
+    /// Install a BF16 out_proj fallback for prefill. When
+    /// `ATLAS_DENSE_QKVZ=1` phase3 prefers this path over the NVFP4 GEMM for
+    /// pure-comparison vs HF (which never quantizes Ling's KDA projections).
+    pub fn set_out_proj_dense_prefill(&mut self, w: DenseWeight) {
+        self.out_proj_dense = Some(w);
+    }
+
     /// Set native FP8 checkpoint weights for w8a16_gemv decode path.
     /// Also sets the raw FP8 DevicePtr fields for prefill GEMM (fp8_gemm_t).
     pub fn set_fp8_weights(&mut self, qkvz: Option<Fp8Weight>, out_proj: Option<Fp8Weight>) {

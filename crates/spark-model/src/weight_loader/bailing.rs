@@ -283,6 +283,11 @@ fn build_linear_attention_bailing(
         config,
         gpu,
     )?;
+    // Keep a BF16 copy of o_proj for the ATLAS_DENSE_QKVZ correctness probe
+    // (skips NVFP4 both for qkvz and o_proj in prefill).
+    layer.set_out_proj_dense_prefill(DenseWeight {
+        weight: ssm35.out_proj.weight,
+    });
     // Install Ling KDA projections + enable the FLA `chunk_kda` decode path.
     layer.set_kda_weights(
         DenseWeight {
