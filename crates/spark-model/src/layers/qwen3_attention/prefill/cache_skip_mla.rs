@@ -65,7 +65,12 @@ impl Qwen3AttentionLayer {
         // ctx.config.head_dim=128 is only the nope part — using it for spans
         // across the expanded q/k/v buffers corrupts every stride.
         let hd = mla_nope + mla_rope;
-        let use_tc = self.dense_gemm_tc_k.0 != 0;
+        // DIAG/SAFETY: ATLAS_MLA_DISABLE_TC=1 forces plain bf16 GEMMs for all
+        // MLA projections. The mma.m16n8k16 dense_gemm_tc kernel is suspected
+        // of incorrect row-fragment mapping for M != 16 (first-amd non-first-8
+        // rows observed zeroed in q_expanded probe).
+        let use_tc = self.dense_gemm_tc_k.0 != 0
+            && std::env::var("ATLAS_MLA_DISABLE_TC").ok().as_deref() != Some("1");
 
         // Q: latent → norm → expand
         let q_latent = ctx.buffers.ssm_ba();
