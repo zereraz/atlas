@@ -506,7 +506,7 @@ extern "C" __global__ void inferspark_prefill_h192(
 #define TILE_CHUNKS_Q64 (BR64 * (HDIM / 8))  // 2048
 #define TILE_CHUNKS_KV  (BC * (HDIM / 8))     // 1024
 
-extern "C" __global__ void inferspark_prefill_64(
+extern "C" __global__ void inferspark_prefill_64_h192(
     const __nv_bfloat16* __restrict__ Q,
     const __nv_bfloat16* __restrict__ K,
     const __nv_bfloat16* __restrict__ V,

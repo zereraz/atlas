@@ -44,7 +44,7 @@ impl Qwen3AttentionLayer {
             h,
             nq,
             nkv,
-            hd,
+            hd: _,
             kv_dim,
             eps,
             bf16,
@@ -60,6 +60,10 @@ impl Qwen3AttentionLayer {
         let mla_nope = mla.nope as u32;
         let mla_v_dim = mla.v_dim as u32;
         let mla_rope = mla.rope as u32;
+        // CRITICAL: MLA per-head qk dim = nope + rope (Ling: 128+64=192).
+        // ctx.config.head_dim=128 is only the nope part — using it for spans
+        // across the expanded q/k/v buffers corrupts every stride.
+        let hd = mla_nope + mla_rope;
         let use_tc = self.dense_gemm_tc_k.0 != 0;
 
         // Q: latent → norm → expand
@@ -105,6 +109,9 @@ impl Qwen3AttentionLayer {
             )?;
         eprintln!("[MLA-CS] post-rms_norm"); ctx.gpu.synchronize(stream)?;
         }
+        // MLA-expanded q = nq*(nope+rope) = 6144 bf16 per token.
+        // qkv_output for Ling = m*(nq+2*nkv)*hd(cfg=128) = m*(32+64)*128 =
+        // m*12288 — comfortably larger than 6144. Use it.
         let qg_out = ctx.buffers.qkv_output();
         if use_tc {
             ops::dense_gemm_tc(
@@ -339,9 +346,18 @@ impl Qwen3AttentionLayer {
         )?;
         eprintln!("[MLA-CS] post-mla_q_rope_writeback_batched"); ctx.gpu.synchronize(stream)?;
         let attn_out_fb = ctx.buffers.attn_output();
+        // Ling MLA needs an HDIM=192 template — the stock HDIM=256 build reads a
+        // 64-wide garbage tail for every chunk; HDIM=128 would truncate 64 cols.
+        let prefill_k = if hd == 192 {
+            let k = crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_64_h192");
+            eprintln!("[MLA-CS] hd=192 using prefill_64_h192 handle={} (0 => fallback)", k.0);
+            if k.0 != 0 { k } else { self.prefill_attn_64_k }
+        } else {
+            self.prefill_attn_64_k
+        };
         ops::prefill_attention_64(
             ctx.gpu,
-            self.prefill_attn_64_k,
+            prefill_k,
             qg_out,
             k_contiguous,
             v_contiguous,

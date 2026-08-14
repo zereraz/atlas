@@ -115,13 +115,7 @@ impl Qwen3AttentionLayer {
             )?;
         }
         sync!("rms_norm");
-        // For MLA-expanded Q in Ling (nq*(nope+rope)=32*192=6144 per token),
-        // qkv_output (sized as nq*hd(gated)*2 + 2*kv*hd) is too small when
-        // attn_gated=false. norm_output is sized max_dim(=h)=2560; we need
-        // 6144 per token. Allocate from attn_output: it's sized for the
-        // absorbed-MLA path (nq*(kv_lora+rope) = 32*576=18432) and is
-        // otherwise unused until after w_o — safe scratch here.
-        let qg_out = ctx.buffers.attn_output();
+        let qg_out = ctx.buffers.qkv_output();
         ops::dense_gemm(
             ctx.gpu,
             self.dense_gemm_k,
