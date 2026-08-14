@@ -184,7 +184,11 @@ impl Qwen3AttentionLayer {
         )?;
         eprintln!("[MLA-CS] post-rms_norm"); ctx.gpu.synchronize(stream)?;
         let k_rope_buf = ctx.buffers.ssm_ba();
-        if use_tc {
+        // DIAG: dense_gemm_tc is suspect for small N (=rope=64) GEMMs — its TC
+        // tiling assumes N>=64 per warp-pair and may drop tiles. If
+        // ATLAS_MLA_FORCE_DENSE_ROPE=1, use the plain bf16 GEMM for k_rope.
+        let force_dense_rope = std::env::var("ATLAS_MLA_FORCE_DENSE_ROPE").ok().as_deref() == Some("1");
+        if use_tc && !force_dense_rope {
             ops::dense_gemm_tc(
                 ctx.gpu,
                 self.dense_gemm_tc_k,
