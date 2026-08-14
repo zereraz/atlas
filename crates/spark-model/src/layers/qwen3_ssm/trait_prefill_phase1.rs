@@ -292,7 +292,6 @@ impl Qwen3SsmLayer {
         };
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
-            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
             let li = ssm_layer_idx % 36;
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == li.to_string()) {
