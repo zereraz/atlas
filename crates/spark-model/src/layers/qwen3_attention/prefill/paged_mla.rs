@@ -326,7 +326,13 @@ impl Qwen3AttentionLayer {
         // Direct flash attention with expanded Q/K/V (not from paged cache).
         let attn_out = ctx.buffers.attn_output();
         let inv_sqrt_d = self.effective_attn_scale(hd);
-        let prefill_k = if hd > 256 && self.prefill_attn_512_k.0 != 0 {
+        // Kernel smem templates are compiled with a fixed HDIM. For Ling MLA
+        // we must use the HDIM=192 build (matches qk_nope+qk_rope=192); the
+        // generic HDIM=256 build reads a 64-wide garbage tail into every
+        // dot-product contribution.
+        let prefill_k = if hd == 192 {
+            crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_h192")
+        } else if hd > 256 && self.prefill_attn_512_k.0 != 0 {
             self.prefill_attn_512_k
         } else {
             self.prefill_attn_k
