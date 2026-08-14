@@ -347,8 +347,45 @@ impl Qwen3AttentionLayer {
         )?;
         eprintln!("[MLA-CS] post-mla_q_rope_writeback_batched"); ctx.gpu.synchronize(stream)?;
         let attn_out_fb = ctx.buffers.attn_output();
-        // Ling MLA needs an HDIM=192 template — the stock HDIM=256 build reads a
-        // 64-wide garbage tail for every chunk; HDIM=128 would truncate 64 cols.
+        // Ling's MLA prefill attention: qk_dim=192 != v_dim=128 — none of the
+        // template-compiled inferspark kernels support that split. Use the
+        // dedicated scalar kernel which writes O as [T, nq*v_dim] contiguous
+        // so downstream wo-GEMM (K-dim nq*v_dim=4096) reads the right stride.
+        if hd == 192 && mla_v_dim == 128 {
+            let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_prefill_attn");
+            eprintln!("[MLA-CS] Ling qkd192/vd128 attn kernel handle={} (0 => fallback)", k.0);
+            if k.0 != 0 {
+                let smem = ((n as usize) * (hd as usize + mla_v_dim as usize) * 2) as u32;
+                spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, k)
+                    .grid([nq, (n + 15) / 16, 1])
+                    .block([256, 1, 1])
+                    .shared_mem(smem)
+                    .arg_ptr(qg_out)
+                    .arg_ptr(k_contiguous)
+                    .arg_ptr(v_contiguous)
+                    .arg_ptr(attn_out_fb)
+                    .arg_u32(n)
+                    .arg_u32(nq)
+                    .arg_u32(nkv)
+                    .arg_f32(1.0f32 / (hd as f32).sqrt())
+                    .arg_u32(1)
+                    .launch(stream)
+                    .map_err(|e| anyhow::anyhow!("ling_mla_prefill_attn launch: {e}"))?;
+                ctx.gpu.synchronize(stream)?;
+                let o_out = ctx.buffers.qkv_output();
+                let wo_k = nq * mla_v_dim;
+                if let Some(ref wo_nvfp4) = mla.wo_nvfp4 {
+                    ops::w4a16_gemm(
+                        ctx.gpu, self.w4a16_gemm_k, attn_out_fb, wo_nvfp4, o_out, n, h, wo_k, stream,
+                    )?;
+                } else {
+                    ops::dense_gemm(
+                        ctx.gpu, self.dense_gemm_k, attn_out_fb, &mla.wo, o_out, n, h, wo_k, stream,
+                    )?;
+                }
+                return Ok(o_out);
+            }
+        }
         let prefill_k = if hd == 192 {
             let k = crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_64_h192");
             eprintln!("[MLA-CS] hd=192 using prefill_64_h192 handle={} (0 => fallback)", k.0);
