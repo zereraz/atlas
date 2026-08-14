@@ -285,6 +285,24 @@ impl Qwen3SsmLayer {
             stream,
         )?;
 
+        // ATLAS_GDN_DUMP: post-conv1d+silu, pre-L2norm (oracle diff point)
+        {
+            static SSM_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let ssm_layer_idx = SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
+            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == ssm_layer_idx.to_string()) {
+                let mut buf = vec![0u8; num_tokens * conv_dim * 2];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(conv_out_buf, &mut buf)?;
+                let p = format!("{}/post_conv_L{ssm_layer_idx}.bin", dir);
+                std::fs::write(&p, &buf).ok();
+                let mut buf2 = vec![0u8; num_tokens * qkvz_size * 2];
+                ctx.gpu.copy_d2h(deinterleaved, &mut buf2)?;
+                let p2 = format!("{}/pre_conv_L{ssm_layer_idx}.bin", dir);
+                std::fs::write(&p2, &buf2).ok();
+            }
+        }
         // ── 7. Batched L2 norm on Q,K for all N tokens ──
         ops::l2_norm(
             ctx.gpu,
