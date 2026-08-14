@@ -71,7 +71,7 @@ impl Qwen3AttentionLayer {
         // q_expanded probe at t8..t14 zero-ish rows). Use the plain bf16 GEMM
         // (dense_gemm — Titan-generation fallback, known-correct) whenever
         // num_tokens < 16; swap back to TC only for larger prefills.
-        let use_tc = self.dense_gemm_tc_k.0 != 0 && (n as usize) >= 16;
+        let use_tc = self.dense_gemm_tc_k.0 != 0 && ((n as usize) % 16 == 0);
 
         // Q: latent → norm → expand
         let q_latent = ctx.buffers.ssm_ba();
