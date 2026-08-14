@@ -61,7 +61,7 @@ impl Qwen3AttentionLayer {
         // Temporary sync checkpoints for diagnosing which MLA kernel writes
         // out-of-bounds under Ling dims. Set ATLAS_MLA_SYNC=1 to activate.
         let sync_dbg = std::env::var("ATLAS_MLA_SYNC").ok().as_deref() == Some("1");
-        eprintln!("[MLA] sync_dbg={sync_dbg} layer={} n={n} hd={hd}", self.attn_layer_idx);
+        eprintln!("[MLA] sync_dbg={sync_dbg} layer={} n={n}", self.attn_layer_idx);
         macro_rules! sync {
             ($label:expr) => {
                 if sync_dbg {
