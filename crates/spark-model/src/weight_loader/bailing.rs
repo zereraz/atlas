@@ -103,17 +103,15 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
                     store, &lp, config.num_experts, gpu, config, variant, absmax_k,
                     quantize_k, stream, false,
                 )?;
-                let gate_nvfp4 = quantize_to_nvfp4(
-                    &moe_weights.gate,
-                    config.num_experts,
-                    h,
-                    gpu,
-                    absmax_k,
-                    quantize_k,
-                    stream,
-                )?;
+                // Ling: keep the router in BF16 exactly as shipped.
+                // Routing is decided by topk(sigmoid(ln @ gate.T) + bias) —
+                // NVFP4-quantizing the 512×2560 router shifted logits just
+                // enough across the topk boundary to pick expert 168
+                // instead of HF's 176 on the same probe (2026-08-13), which
+                // poisons the entire downstream. 2.6 MB extra is nothing for
+                // guaranteed routing bit-parity with HF.
                 let moe_layer = MoeLayer::new(
-                    moe_weights, config.num_experts, Some(gate_nvfp4), gpu, config,
+                    moe_weights, config.num_experts, None, gpu, config,
                 )?;
                 if variant == crate::weight_map::Nvfp4Variant::Mxfp4Dequanted {
                     // MXFP4 runtime requantization duplicates the on-disk
