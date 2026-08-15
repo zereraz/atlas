@@ -395,7 +395,7 @@ impl Qwen3AttentionLayer {
                     )?;
                     let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
                     if k.0 != 0 {
-                        ctx.gpu.kernel_launch(k)
+                        spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, k)
                             .grid([n, 1, 1])
                             .block([128, 1, 1])
                             .arg_ptr(attn_out_fb)
@@ -460,7 +460,7 @@ impl Qwen3AttentionLayer {
             )?;
             let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
             if k.0 != 0 {
-                ctx.gpu.kernel_launch(k)
+                spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, k)
                     .grid([n, 1, 1])
                     .block([128, 1, 1])
                     .arg_ptr(attn_out_fb)

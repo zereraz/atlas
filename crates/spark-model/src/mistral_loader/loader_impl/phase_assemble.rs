@@ -99,6 +99,9 @@ pub(super) fn assemble_layer(
             weight: wkv_a_dense.weight,
         },
         wo: require(ctx.o_dense_bf16, "o_dense_bf16")?,
+        // Mistral MLA has no sigmoid head-gate; use a NULL placeholder.
+        // The g_proj gate is only launched by the Ling (bailing.rs) loader path.
+        g_proj: DenseWeight { weight: spark_runtime::gpu::DevicePtr::NULL },
         wo_nvfp4: if disable_nvfp4_mla { None } else { ctx.o_nvfp4 },
         wq_b_rope: require(ctx.wq_b_rope, "wq_b_rope")?,
         w_uk_t: require(ctx.w_uk_t, "w_uk_t")?,
