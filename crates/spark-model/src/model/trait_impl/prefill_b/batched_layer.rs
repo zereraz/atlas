@@ -147,6 +147,7 @@ impl TransformerModel {
             2usize
         };
 
+        crate::layers::qwen3_ssm::set_thread_layer_idx(layer_idx);
         // ── Phase 1: per-stream projections + conv1d + L2 norm ──
         // Each stream's data lands in gdn_bufs at offset `b * chunk_len`.
         // The `_kv_write_start` arg is ignored by SSM layers (recurrent
@@ -216,6 +217,7 @@ impl TransformerModel {
 
         // meta is consumed for chunk_len/batch_size above.
         let _ = meta;
+        crate::layers::qwen3_ssm::clear_thread_layer_idx();
         Ok(())
     }
 

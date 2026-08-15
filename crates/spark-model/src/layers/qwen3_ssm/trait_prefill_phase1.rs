@@ -4,6 +4,27 @@
 
 use super::*;
 
+thread_local! {
+    static THREAD_LAYER_IDX: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Set the current model-layer index for this thread (used for ATLAS_GDN_DUMP
+/// filenames). Call before dispatching `prefill_phase1` on a layer and clear
+/// with `clear_thread_layer_idx()` afterwards.
+pub fn set_thread_layer_idx(idx: usize) {
+    THREAD_LAYER_IDX.with(|c| c.set(idx));
+}
+
+/// Clear previously-set model-layer index.
+pub fn clear_thread_layer_idx() {
+    THREAD_LAYER_IDX.with(|c| c.set(usize::MAX));
+}
+
+/// Get current model-layer index override (usize::MAX = none).
+pub(crate) fn get_thread_layer_idx() -> usize {
+    THREAD_LAYER_IDX.with(|c| c.get())
+}
+
 impl Qwen3SsmLayer {
     pub(super) fn is_ssm_layer_inner(&self) -> bool {
         true
@@ -27,6 +48,46 @@ impl Qwen3SsmLayer {
         ctx: &ForwardContext,
         stream: u64,
     ) -> Result<()> {
+        let override_idx = THREAD_LAYER_IDX.with(|cell| cell.get());
+        self.prefill_phase1_layer_idx_impl(
+            hidden,
+            residual,
+            num_tokens,
+            state,
+            _kv_cache,
+            _seq_len_start,
+            _block_table,
+            _disk_block_ids,
+            _disk_last_offloaded_per_layer,
+            _kv_write_start,
+            gdn_bufs,
+            token_offset,
+            ctx,
+            stream,
+            override_idx,
+        )
+    }
+
+    /// Same as prefill_phase1_inner but takes an explicit model-layer index for
+    /// the ATLAS_GDN_DUMP filename. `usize::MAX` = legacy atomic-counter path.
+    pub(super) fn prefill_phase1_layer_idx_impl(
+        &self,
+        hidden: DevicePtr,
+        residual: DevicePtr,
+        num_tokens: usize,
+        state: &mut dyn LayerState,
+        _kv_cache: &mut PagedKvCache,
+        _seq_len_start: usize,
+        _block_table: &mut Vec<u32>,
+        _disk_block_ids: &mut Vec<u32>,
+        _disk_last_offloaded_per_layer: &mut Vec<u32>,
+        _kv_write_start: usize,
+        gdn_bufs: &GdnPrefillBuffers,
+        token_offset: usize,
+        ctx: &ForwardContext,
+        stream: u64,
+        layer_idx_override: usize,
+    ) -> Result<()> {
         let h = ctx.config.hidden_size;
         let eps = ctx.config.rms_norm_eps as f32;
         let k = num_tokens as u32;
@@ -48,10 +109,13 @@ impl Qwen3SsmLayer {
         let conv_dim = key_dim * 2 + value_dim;
         let d_conv = ctx.config.linear_conv_kernel_dim;
         let qkvz_size = ctx.config.ssm_qkvz_size();
-        let ssm_layer_idx = {
+        let ssm_layer_idx = if layer_idx_override != usize::MAX {
+            layer_idx_override
+        } else {
             static SSM_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         };
+        let _ = ssm_layer_idx;
 
         // ENTRY diagnostic sync removed: it stalled the GPU pipeline at every
         // SSM layer entry, killing async kernel pipelining. Errors will surface
@@ -242,7 +306,7 @@ impl Qwen3SsmLayer {
                 let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
                 if !dir.is_empty() {
                     ctx.gpu.synchronize(stream)?;
-                    let li = ssm_layer_idx % 36;
+                    let li = ssm_layer_idx % 42;
                     let mut buf = vec![0u8; num_tokens * nv * kd * bf16];
                     ctx.gpu.copy_d2h(f_raw, &mut buf)?;
                     std::fs::write(format!("{dir}/kda_f_raw_L{li}.bin"), &buf).ok();
@@ -310,7 +374,7 @@ impl Qwen3SsmLayer {
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
-            let li = ssm_layer_idx % 36;
+            let li = ssm_layer_idx % 42;
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == li.to_string()) {
                 let mut buf = vec![0u8; num_tokens * conv_dim * 2];
                 ctx.gpu.synchronize(stream)?;
@@ -346,7 +410,7 @@ impl Qwen3SsmLayer {
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
-            let idx8 = ssm_layer_idx % 36;
+            let idx8 = ssm_layer_idx % 42;
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx8.to_string()) {
                 let mut buf8 = vec![0u8; num_tokens * conv_dim * bf16];
                 ctx.gpu.synchronize(stream)?;

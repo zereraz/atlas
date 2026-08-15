@@ -156,6 +156,7 @@ mod trait_prefill;
 mod trait_prefill_gdn;
 mod trait_prefill_helper;
 mod trait_prefill_phase1;
+pub use trait_prefill_phase1::{clear_thread_layer_idx, set_thread_layer_idx};
 mod trait_prefill_phase3;
 mod trait_prefill_proj;
 mod trait_prefill_recur;

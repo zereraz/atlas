@@ -92,11 +92,16 @@ impl Qwen3SsmLayer {
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
-            static CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            // h_state dump mirrors the phase1 `SSM_CALL` counter: this fires
-            // once per SSM layer per prefill. The phase1 counter resets to 0 on
-            // process restart — we use a modulo so repeated calls wrap cleanly.
-            let idx = CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
+            // Layer index comes from thread-local (model-layer idx) when
+            // set by the caller; falls back to atomic counter % 42 otherwise.
+            let tl = super::trait_prefill_phase1::get_thread_layer_idx();
+            let idx = if tl != usize::MAX {
+                tl
+            } else {
+                static CALL: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 42
+            };
             if !dir.is_empty() && layers.split(',').any(|s| s.trim() == idx.to_string()) {
                 let bytes = nv * kd * vd * fp32;
                 let mut buf = vec![0u8; bytes];
@@ -173,9 +178,14 @@ impl Qwen3SsmLayer {
                 per_tok.iter().take(24).collect::<Vec<_>>()
             );
         }
-        static RAW_CALL: std::sync::atomic::AtomicUsize =
-            std::sync::atomic::AtomicUsize::new(0);
-        let li = RAW_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
+        let tl2 = super::trait_prefill_phase1::get_thread_layer_idx();
+        let li = if tl2 != usize::MAX {
+            tl2
+        } else {
+            static RAW_CALL: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+            RAW_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 42
+        };
         // ATLAS_GDN_DUMP: kda_raw_o.bin — pre-gate pre-rmsnorm [T, 4096] bf16
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
