@@ -431,7 +431,11 @@ fn build_full_attention_bailing(
 
     // WQK absorbed: for Ling, wq_b = q_proj [6144, h] rows;
     // w_qk_absorbed[n, lkv, l] = sum_p(q_nope[n*hd + (p∈nope), l] * w_uk[n, lkv, p]).
-    let q_lora = nope + rope; // 192 rows per head (nope + rope)
+    // IMPORTANT: q_lora must match the runtime MLA latent width. Ling has no
+    // q down-projection: wq_a=I(h) and wq_b=q_proj [6144, h], so q_latent is
+    // h-wide (=2560), NOT 192. Using 192 would truncate the identity GEMM and
+    // mis-stride wq_b (reading only the first 192 of its 2560 input rows).
+    let q_lora = h; // hidden_size
     let wqk_size = n_kv * kv_lora * q_lora * bf16;
     let mut wqb_host = vec![0u8; n_heads * hd * h * bf16];
     gpu.copy_d2h(wq_b_dense.weight, &mut wqb_host)?;
