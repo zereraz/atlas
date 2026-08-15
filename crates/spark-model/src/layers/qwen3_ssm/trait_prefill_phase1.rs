@@ -48,6 +48,10 @@ impl Qwen3SsmLayer {
         let conv_dim = key_dim * 2 + value_dim;
         let d_conv = ctx.config.linear_conv_kernel_dim;
         let qkvz_size = ctx.config.ssm_qkvz_size();
+        let ssm_layer_idx = {
+            static SSM_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        };
 
         // ENTRY diagnostic sync removed: it stalled the GPU pipeline at every
         // SSM layer entry, killing async kernel pipelining. Errors will surface
@@ -238,15 +242,16 @@ impl Qwen3SsmLayer {
                 let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
                 if !dir.is_empty() {
                     ctx.gpu.synchronize(stream)?;
+                    let li = ssm_layer_idx % 36;
                     let mut buf = vec![0u8; num_tokens * nv * kd * bf16];
                     ctx.gpu.copy_d2h(f_raw, &mut buf)?;
-                    std::fs::write(format!("{dir}/kda_f_raw_L.bin"), &buf).ok();
+                    std::fs::write(format!("{dir}/kda_f_raw_L{li}.bin"), &buf).ok();
                     let mut bbuf = vec![0u8; num_tokens * nv * bf16];
                     ctx.gpu.copy_d2h(b_raw, &mut bbuf)?;
-                    std::fs::write(format!("{dir}/kda_b_raw_L.bin"), &bbuf).ok();
+                    std::fs::write(format!("{dir}/kda_b_raw_L{li}.bin"), &bbuf).ok();
                     let mut nbuf = vec![0u8; num_tokens * h * bf16];
                     ctx.gpu.copy_d2h(normed, &mut nbuf)?;
-                    std::fs::write(format!("{dir}/kda_normed_L.bin"), &nbuf).ok();
+                    std::fs::write(format!("{dir}/kda_normed_L{li}.bin"), &nbuf).ok();
                 }
             }
             if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
@@ -302,10 +307,6 @@ impl Qwen3SsmLayer {
         )?;
 
         // ATLAS_GDN_DUMP: post-conv1d+silu, pre-L2norm (oracle diff point)
-        let ssm_layer_idx = {
-            static SSM_CALL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            SSM_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        };
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();

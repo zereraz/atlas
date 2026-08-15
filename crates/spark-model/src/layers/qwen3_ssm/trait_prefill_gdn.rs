@@ -178,21 +178,24 @@ impl Qwen3SsmLayer {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
             if !dir.is_empty() {
+                static RAW_CALL: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let li = RAW_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
                 let mut buf = vec![0u8; total * value_dim * 2];
                 ctx.gpu.synchronize(stream)?;
                 ctx.gpu.copy_d2h(gdn_bufs.output, &mut buf)?;
-                std::fs::write(format!("{}/kda_raw_o.bin", dir), &buf).ok();
+                std::fs::write(format!("{}/kda_raw_o_L{li}.bin", dir), &buf).ok();
                 // also z gate
                 let mut zbuf = vec![0u8; total * value_dim * 2];
                 ctx.gpu.copy_d2h(gdn_bufs.z, &mut zbuf)?;
-                std::fs::write(format!("{}/kda_raw_z.bin", dir), &zbuf).ok();
+                std::fs::write(format!("{}/kda_raw_z_L{li}.bin", dir), &zbuf).ok();
                 // log_decay [T, nv*kd] fp32 and beta [T, nv] fp32
                 let mut ldbuf = vec![0u8; total * nv * kd * 4];
                 ctx.gpu.copy_d2h(log_decay, &mut ldbuf)?;
-                std::fs::write(format!("{}/kda_log_decay.bin", dir), &ldbuf).ok();
+                std::fs::write(format!("{}/kda_log_decay_L{li}.bin", dir), &ldbuf).ok();
                 let mut bbuf = vec![0u8; total * nv * 4];
                 ctx.gpu.copy_d2h(beta, &mut bbuf)?;
-                std::fs::write(format!("{}/kda_beta.bin", dir), &bbuf).ok();
+                std::fs::write(format!("{}/kda_beta_L{li}.bin", dir), &bbuf).ok();
             }
             let _ = layers;
         }
