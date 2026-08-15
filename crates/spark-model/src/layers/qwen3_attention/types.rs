@@ -51,6 +51,10 @@ pub struct MlaWeights {
     /// Precomputed YaRN inv_freq table [rotary_dim/2] FP32 on GPU.
     /// NULL = use standard theta computation in the RoPE kernel.
     pub yarn_inv_freq: spark_runtime::gpu::DevicePtr,
+    /// headwise output gate for MLA attention (Ling/DeepSeek style):
+    /// `attn_out = attn_out.view(N, n_heads, v_dim) * sigmoid(g_proj(hidden)).unsqueeze(-1)`
+    /// then `dense(attn_out)`. Weight is [num_heads, hidden] (head_wise granularity).
+    pub g_proj: DenseWeight,
     pub q_lora_rank: usize,
     pub kv_lora_rank: usize,
     pub nope: usize,

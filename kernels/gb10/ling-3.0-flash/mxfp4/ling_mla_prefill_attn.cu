@@ -123,3 +123,32 @@ extern "C" __global__ void ling_mla_prefill_attn(
             orow[lane + 32 * i] = __float2bfloat16(acc[i] * inv_l);
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// ling_mla_headwise_gate — apply sigmoid headwise gate to MLA attn output.
+//
+//   attn_out[n, h, vd] *= sigmoid(gate_raw[n, h])          for vd in 0..128
+//
+// Shapes:
+//   attn_out : [N, 32, 128] bf16  (heads*vd = 4096 elements per token, packed)
+//   gate_raw : [N, 32] bf16       (pre-sigmoid; sigmoid applied here)
+// Grid:  (N) blocks. Block: 128 threads — one thread per (h, vd-pair) slice.
+// Each thread: h = tid / 4, v_lane = tid % 4  → 4 lanes per head cover vd=32 words each.
+extern "C" __global__ void ling_mla_headwise_gate(
+    __nv_bfloat16* __restrict__ attn_out,   // [N, 32*128] bf16
+    const __nv_bfloat16* __restrict__ gate_raw, // [N, 32] bf16
+    unsigned int N)
+{
+    const unsigned int n = blockIdx.x;
+    if (n >= N) return;
+    const unsigned int tid = threadIdx.x;             // 0..127
+    const unsigned int h = tid >> 2;                  // 0..31
+    const unsigned int lane = tid & 3;                // 0..3
+    // sigmoid(gate_raw[n, h])
+    const float g = 1.0f / (1.0f + __expf(-__bfloat162float(gate_raw[n * 32 + h])));
+    __nv_bfloat16* base = attn_out + n * (32u * 128u) + h * 128u;
+    #pragma unroll
+    for (int i = 0; i < 32; i++) {
+        base[lane + 4 * i] = __float2bfloat16(__bfloat162float(base[lane + 4 * i]) * g);
+    }
+}

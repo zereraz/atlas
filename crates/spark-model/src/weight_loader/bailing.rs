@@ -588,6 +588,7 @@ fn build_full_attention_bailing(
         nope,
         rope,
         v_dim,
+        g_proj,
     };
 
     let mut layer = Qwen3AttentionLayer::new_ungated(
@@ -609,7 +610,7 @@ fn build_full_attention_bailing(
     // KDA sibling layers use true head_dim=128. Force the MLA prefill path
     // to see the right full head dimension and per-KV-group shape.
     layer.set_dimension_overrides(config.qk_nope_head_dim + config.qk_rope_head_dim, n_heads, n_kv);
-    let _ = g_proj; // output gate lives on the MLA forward path
+
 
     Ok(Box::new(layer))
 }

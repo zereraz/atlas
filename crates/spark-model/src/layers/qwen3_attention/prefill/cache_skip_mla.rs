@@ -382,6 +382,32 @@ impl Qwen3AttentionLayer {
                     .launch(stream)
                     .map_err(|e| anyhow::anyhow!("ling_mla_prefill_attn launch: {e}"))?;
                 ctx.gpu.synchronize(stream)?;
+                // ── Ling MLA headwise sigmoid gate ─────────────────────────
+                // vLLM bailing_moe_v3: attn_out.view(N, n_heads, v_dim) *
+                //   sigmoid(g_proj(normed)).unsqueeze(-1), then o_proj.
+                // Compute gate_raw [N, 32] then fused-apply to attn_out_fb [N, 32*128].
+                {
+                    let n_heads = nq; // 32 for Ling
+                    let gate_raw = ctx.buffers.gate_logits(); // reuse (unused in MLA)
+                    ops::dense_gemm(
+                        ctx.gpu, self.dense_gemm_k, normed, &mla.g_proj, gate_raw,
+                        n, n_heads, h, stream,
+                    )?;
+                    let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
+                    if k.0 != 0 {
+                        ctx.gpu.kernel_launch(k)
+                            .grid([n, 1, 1])
+                            .block([128, 1, 1])
+                            .arg_ptr(attn_out_fb)
+                            .arg_ptr(gate_raw)
+                            .arg_u32(n)
+                            .launch(stream)
+                            .map_err(|e| anyhow::anyhow!("ling_mla_headwise_gate launch: {e}"))?;
+                        ctx.gpu.synchronize(stream)?;
+                    } else {
+                        tracing::warn!("MLA headwise-gate kernel missing; gate skipped (will diverge from vLLM)");
+                    }
+                }
                 let o_out = ctx.buffers.qkv_output();
                 let wo_k = nq * mla_v_dim;
                 if let Some(ref wo_nvfp4) = mla.wo_nvfp4 {
@@ -422,6 +448,31 @@ impl Qwen3AttentionLayer {
         )
         .map_err(|e| anyhow::anyhow!("MLA flash_attn_64 fallback: {e}"))?;
         eprintln!("[MLA-CS] post-prefill_attention_64"); ctx.gpu.synchronize(stream)?;
+        // ── Ling MLA headwise sigmoid gate (fallback path) ──────────────
+        // See comment above. Gate attn_out_fb [N, 32*128] with sigmoid of
+        // gate_raw [N, 32] = dense_gemm(normed, g_proj).
+        {
+            let n_heads = nq;
+            let gate_raw = ctx.buffers.gate_logits();
+            ops::dense_gemm(
+                ctx.gpu, self.dense_gemm_k, normed, &mla.g_proj, gate_raw,
+                n, n_heads, h, stream,
+            )?;
+            let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
+            if k.0 != 0 {
+                ctx.gpu.kernel_launch(k)
+                    .grid([n, 1, 1])
+                    .block([128, 1, 1])
+                    .arg_ptr(attn_out_fb)
+                    .arg_ptr(gate_raw)
+                    .arg_u32(n)
+                    .launch(stream)
+                    .map_err(|e| anyhow::anyhow!("ling_mla_headwise_gate launch: {e}"))?;
+                ctx.gpu.synchronize(stream)?;
+            } else {
+                tracing::warn!("MLA headwise-gate kernel missing; gate skipped (will diverge from vLLM)");
+            }
+        }
         if std::env::var_os("ATLAS_MLA_DIAG").is_some() && self.attn_layer_idx == 5 {
             ctx.gpu.synchronize(stream)?;
             let dump = |tag: &str, ptr: DevicePtr, len: usize| -> anyhow::Result<()> {
