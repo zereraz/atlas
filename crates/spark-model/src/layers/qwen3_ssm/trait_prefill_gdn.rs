@@ -199,37 +199,11 @@ impl Qwen3SsmLayer {
             }
             let _ = layers;
         }
-        // KDA gate: FLA's `use_gate_in_kernel=True` multiplies o *= sigmoid(g).
-        // Atlas's kda_delta_rule_prefill does NOT fuse the sigmoid gate — apply
-        // via a post-hoc element-wise kernel. g_out is stored per-token in
-        // `gdn_bufs.z` (same layout as the KDA o, [T, nv*vd] bf16).
-        if self.gated_rms_norm_prefill_k.0 != 0 {
-            let out_buf = gdn_bufs.output;
-            let z_src = gdn_bufs.z;
-            ops::gated_rms_norm_prefill(
-                ctx.gpu,
-                self.gated_rms_norm_prefill_k,
-                out_buf,
-                z_src,
-                &self.ssm.norm,
-                out_buf, // in-place reuse
-                nv as u32,
-                vd as u32,
-                ctx.config.rms_norm_eps as f32,
-                total as u32,
-                value_dim as u32,
-                (nv * vd) as u32,  // z stride per token (contiguous)
-                stream,
-            )?;
-            // ATLAS_GDN_DUMP: post-gate+rmsnorm output (o_proj input)
-            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
-            if !dir.is_empty() {
-                ctx.gpu.synchronize(stream)?;
-                let mut buf = vec![0u8; total * value_dim * 2];
-                ctx.gpu.copy_d2h(out_buf, &mut buf)?;
-                std::fs::write(format!("{}/kda_gated_L{li}.bin", dir), &buf).ok();
-            }
-        }
+        // NOTE: `prefill_phase3_inner` (called after this) applies the gated
+        // RMS norm (sigmoid-gate × per-head RMS × o_norm weight) on
+        // gdn_bufs.output → o_proj GEMM. Doing that here a second time would
+        // DOUBLE-APPLY the gate, so we intentionally do NOT gate in
+        // prefill_kda_full_inner.
         Ok(())
     }
 
