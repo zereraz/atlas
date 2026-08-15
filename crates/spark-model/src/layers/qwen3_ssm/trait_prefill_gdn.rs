@@ -186,6 +186,13 @@ impl Qwen3SsmLayer {
                 let mut zbuf = vec![0u8; total * value_dim * 2];
                 ctx.gpu.copy_d2h(gdn_bufs.z, &mut zbuf)?;
                 std::fs::write(format!("{}/kda_raw_z.bin", dir), &zbuf).ok();
+                // log_decay [T, nv*kd] fp32 and beta [T, nv] fp32
+                let mut ldbuf = vec![0u8; total * nv * kd * 4];
+                ctx.gpu.copy_d2h(log_decay, &mut ldbuf)?;
+                std::fs::write(format!("{}/kda_log_decay.bin", dir), &ldbuf).ok();
+                let mut bbuf = vec![0u8; total * nv * 4];
+                ctx.gpu.copy_d2h(beta, &mut bbuf)?;
+                std::fs::write(format!("{}/kda_beta.bin", dir), &bbuf).ok();
             }
             let _ = layers;
         }
