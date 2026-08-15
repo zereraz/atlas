@@ -173,14 +173,14 @@ impl Qwen3SsmLayer {
                 per_tok.iter().take(24).collect::<Vec<_>>()
             );
         }
+        static RAW_CALL: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+        let li = RAW_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
         // ATLAS_GDN_DUMP: kda_raw_o.bin — pre-gate pre-rmsnorm [T, 4096] bf16
         {
             let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
             let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
             if !dir.is_empty() {
-                static RAW_CALL: std::sync::atomic::AtomicUsize =
-                    std::sync::atomic::AtomicUsize::new(0);
-                let li = RAW_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 36;
                 let mut buf = vec![0u8; total * value_dim * 2];
                 ctx.gpu.synchronize(stream)?;
                 ctx.gpu.copy_d2h(gdn_bufs.output, &mut buf)?;
@@ -194,7 +194,7 @@ impl Qwen3SsmLayer {
                 ctx.gpu.copy_d2h(log_decay, &mut ldbuf)?;
                 std::fs::write(format!("{}/kda_log_decay_L{li}.bin", dir), &ldbuf).ok();
                 let mut bbuf = vec![0u8; total * nv * 4];
-                ctx.gpu.copy_d2h(beta, &mut bbuf)?;
+                ctx.gpu.copy_d2h(beta2, &mut bbuf)?;
                 std::fs::write(format!("{}/kda_beta_L{li}.bin", dir), &bbuf).ok();
             }
             let _ = layers;
