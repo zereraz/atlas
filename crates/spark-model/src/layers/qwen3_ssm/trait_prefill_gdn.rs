@@ -221,6 +221,14 @@ impl Qwen3SsmLayer {
                 (nv * vd) as u32,  // z stride per token (contiguous)
                 stream,
             )?;
+            // ATLAS_GDN_DUMP: post-gate+rmsnorm output (o_proj input)
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            if !dir.is_empty() {
+                ctx.gpu.synchronize(stream)?;
+                let mut buf = vec![0u8; total * value_dim * 2];
+                ctx.gpu.copy_d2h(out_buf, &mut buf)?;
+                std::fs::write(format!("{}/kda_gated_L{li}.bin", dir), &buf).ok();
+            }
         }
         Ok(())
     }
