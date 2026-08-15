@@ -173,18 +173,26 @@ impl Qwen3SsmLayer {
                 per_tok.iter().take(24).collect::<Vec<_>>()
             );
         }
+        // ATLAS_GDN_DUMP: kda_raw_o.bin — pre-gate pre-rmsnorm [T, 4096] bf16
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
+            if !dir.is_empty() {
+                let mut buf = vec![0u8; total * value_dim * 2];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(gdn_bufs.output, &mut buf)?;
+                std::fs::write(format!("{}/kda_raw_o.bin", dir), &buf).ok();
+                // also z gate
+                let mut zbuf = vec![0u8; total * value_dim * 2];
+                ctx.gpu.copy_d2h(gdn_bufs.z, &mut zbuf)?;
+                std::fs::write(format!("{}/kda_raw_z.bin", dir), &zbuf).ok();
+            }
+            let _ = layers;
+        }
         // KDA gate: FLA's `use_gate_in_kernel=True` multiplies o *= sigmoid(g).
         // Atlas's kda_delta_rule_prefill does NOT fuse the sigmoid gate — apply
         // via a post-hoc element-wise kernel. g_out is stored per-token in
         // `gdn_bufs.z` (same layout as the KDA o, [T, nv*vd] bf16).
-        // Reuse the gated RMS norm kernel to compute output = sigmoid(z) * o.
-        // (RMS weight is identity; we don't need the rms scaling, just the
-        // sigmoid product semantics — call it with eps = -huge to skip rsq.)
-        // Simpler: use a dedicated element-wise sigmoid product; the existing
-        // kda_gated_rms_norm_prefill does exactly this if rms is disabled.
-        // For now, fall back to a CPU-side fix using a small dedicated kernel
-        // via `gated_rms_norm_prefill` — gamma is weight[0]=1, but that's what
-        // FLA's nuclear option does: gate sigmoid only.
         if self.gated_rms_norm_prefill_k.0 != 0 {
             let out_buf = gdn_bufs.output;
             let z_src = gdn_bufs.z;
