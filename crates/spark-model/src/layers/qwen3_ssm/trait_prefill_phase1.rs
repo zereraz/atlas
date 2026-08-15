@@ -233,6 +233,22 @@ impl Qwen3SsmLayer {
                 self.kda_lower_bound_f,
                 stream,
             )?;
+            // ATLAS_GDN_DUMP: diag — raw f/b GEMM outputs before kda_gates
+            {
+                let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+                if !dir.is_empty() {
+                    ctx.gpu.synchronize(stream)?;
+                    let mut buf = vec![0u8; num_tokens * nv * kd * bf16];
+                    ctx.gpu.copy_d2h(f_raw, &mut buf)?;
+                    std::fs::write(format!("{dir}/kda_f_raw_L.bin"), &buf).ok();
+                    let mut bbuf = vec![0u8; num_tokens * nv * bf16];
+                    ctx.gpu.copy_d2h(b_raw, &mut bbuf)?;
+                    std::fs::write(format!("{dir}/kda_b_raw_L.bin"), &bbuf).ok();
+                    let mut nbuf = vec![0u8; num_tokens * h * bf16];
+                    ctx.gpu.copy_d2h(normed, &mut nbuf)?;
+                    std::fs::write(format!("{dir}/kda_normed_L.bin"), &nbuf).ok();
+                }
+            }
             if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
                 ctx.gpu.synchronize(stream)?;
                 let mut ld = vec![0u8; (nv * kd).min(8) * 4];
