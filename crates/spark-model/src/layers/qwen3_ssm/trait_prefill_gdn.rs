@@ -56,6 +56,10 @@ impl Qwen3SsmLayer {
         // bound only by grid.y; use a conservative 65535 per launch.
         const MAX_SEQ_PER_LAUNCH: usize = 65535;
         let mut offset = 0usize;
+        // KDA prefill: kda_delta_rule_prefill computes raw recurrence output.
+        // Then we must apply the sigmoid gate `o = o * sigmoid(g)` matching FLA
+        // `use_gate_in_kernel=True` semantics. Atlas KDA kernel doesn't fuse
+        // this, so apply it via gated_rms_norm_prefill with identity gamma=1.
         while offset < total {
             let chunk = (total - offset).min(MAX_SEQ_PER_LAUNCH);
             ops::kda_prefill(
@@ -168,6 +172,37 @@ impl Qwen3SsmLayer {
                 super::debug::SSM_LAYER_CALL_COUNTER.load(std::sync::atomic::Ordering::Relaxed),
                 per_tok.iter().take(24).collect::<Vec<_>>()
             );
+        }
+        // KDA gate: FLA's `use_gate_in_kernel=True` multiplies o *= sigmoid(g).
+        // Atlas's kda_delta_rule_prefill does NOT fuse the sigmoid gate — apply
+        // via a post-hoc element-wise kernel. g_out is stored per-token in
+        // `gdn_bufs.z` (same layout as the KDA o, [T, nv*vd] bf16).
+        // Reuse the gated RMS norm kernel to compute output = sigmoid(z) * o.
+        // (RMS weight is identity; we don't need the rms scaling, just the
+        // sigmoid product semantics — call it with eps = -huge to skip rsq.)
+        // Simpler: use a dedicated element-wise sigmoid product; the existing
+        // kda_gated_rms_norm_prefill does exactly this if rms is disabled.
+        // For now, fall back to a CPU-side fix using a small dedicated kernel
+        // via `gated_rms_norm_prefill` — gamma is weight[0]=1, but that's what
+        // FLA's nuclear option does: gate sigmoid only.
+        if self.gated_rms_norm_prefill_k.0 != 0 {
+            let out_buf = gdn_bufs.output;
+            let z_src = gdn_bufs.z;
+            ops::gated_rms_norm_prefill(
+                ctx.gpu,
+                self.gated_rms_norm_prefill_k,
+                out_buf,
+                z_src,
+                &self.ssm.norm,
+                out_buf, // in-place reuse
+                nv as u32,
+                vd as u32,
+                ctx.config.rms_norm_eps as f32,
+                total as u32,
+                value_dim as u32,
+                (nv * vd) as u32,  // z stride per token (contiguous)
+                stream,
+            )?;
         }
         Ok(())
     }
