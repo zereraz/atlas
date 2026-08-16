@@ -525,6 +525,50 @@ impl Qwen3AttentionLayer {
         })?;
 
         mla_diag_norm(ctx.gpu, "v_extracted", v_extracted, nq as usize * mla_v_dim as usize);
+
+        // Step 9.5: Headwise sigmoid gate (Ling MLA)
+        // vLLM bailing_moe_v3: attn_out.view(N, n_heads, v_dim) *=
+        //   sigmoid(g_proj(normed)).unsqueeze(-1), then o_proj.
+        // The prefill path (cache_skip_mla.rs) applies this gate but the
+        // decode path was missing it, causing a 14x norm blow-up at MLA layers.
+        if mla.g_proj.weight.0 != 0 {
+            let gate_raw = ctx.buffers.gate_logits();
+            prof!("gate_gemv", {
+                ops::dense_gemv(
+                    ctx.gpu,
+                    self.dense_gemv_k,
+                    normed,
+                    &mla.g_proj,
+                    gate_raw,
+                    nq, // output dim = n_heads
+                    h,  // input dim = hidden
+                    stream,
+                )
+            })?;
+            let gate_k = crate::layers::try_kernel(
+                ctx.gpu,
+                "ling_mla_attn",
+                "ling_mla_headwise_gate",
+            );
+            if gate_k.0 != 0 {
+                prof!("gate_apply", {
+                    spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, gate_k)
+                        .grid([1, 1, 1])
+                        .block([128, 1, 1])
+                        .arg_ptr(v_extracted)
+                        .arg_ptr(gate_raw)
+                        .arg_u32(1u32)
+                        .launch(stream)
+                        .map_err(|e| anyhow::anyhow!("MLA decode headwise-gate launch: {e}"))
+                })?;
+            } else {
+                tracing::warn!(
+                    "MLA decode: headwise-gate kernel missing; gate skipped (will diverge from vLLM)"
+                );
+            }
+            mla_diag_norm(ctx.gpu, "v_extracted(gated)", v_extracted, nq as usize * mla_v_dim as usize);
+        }
+
         // Step 10: O projection
         let o_out = ctx.buffers.qkv_output();
         if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wo"); ctx.gpu.synchronize(stream)?; }
