@@ -53,6 +53,19 @@ impl TransformerModel {
         // 1. Embedding lookup
         self.embed(token, hidden, stream)?;
 
+        // DIAG: dump hidden right after embed
+        if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP") && !dir.is_empty() {
+            self.gpu.synchronize(stream)?;
+            let h = self.config.hidden_size;
+            let mut vals = vec![0u8; h * 2];
+            let _ = self.gpu.copy_d2h(hidden, &mut vals);
+            let allf: Vec<f32> = vals.chunks_exact(2)
+                .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
+                .collect();
+            let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(std::path::Path::new(&dir).join("decode_embed.bin"), &bytes).ok();
+        }
+
         // 2. Pre-allocate KV cache blocks + upload attention metadata
         let bs = kv_cache.block_size();
         let blocks_needed = (seq.seq_len / bs) + 1;

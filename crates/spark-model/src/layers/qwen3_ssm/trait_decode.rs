@@ -41,6 +41,17 @@ impl Qwen3SsmLayer {
             eps,
             stream,
         )?;
+        // DIAG: dump hidden after rms_norm_residual (should be unchanged = embed)
+        if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP") && !dir.is_empty() {
+            ctx.gpu.synchronize(stream)?;
+            let mut vals = vec![0u8; h * 2];
+            let _ = ctx.gpu.copy_d2h(hidden, &mut vals);
+            let allf: Vec<f32> = vals.chunks_exact(2)
+                .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
+                .collect();
+            let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_rms.bin", self.attn_layer_idx)), &bytes).ok();
+        }
         if debug {
             ctx.gpu.synchronize(stream)?;
             Self::debug_bf16(ctx.gpu, "pre-norm", normed, 4);
@@ -111,6 +122,17 @@ impl Qwen3SsmLayer {
             eps,
             stream,
         )?;
+        // DIAG: dump hidden after residual_add_rms_norm (should be embed + ssm_out)
+        if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP") && !dir.is_empty() {
+            ctx.gpu.synchronize(stream)?;
+            let mut vals = vec![0u8; h * 2];
+            let _ = ctx.gpu.copy_d2h(hidden, &mut vals);
+            let allf: Vec<f32> = vals.chunks_exact(2)
+                .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
+                .collect();
+            let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_addrms.bin", self.attn_layer_idx)), &bytes).ok();
+        }
         if debug {
             ctx.gpu.synchronize(stream)?;
             Self::debug_bf16(ctx.gpu, "post-ssm-residual", residual, 4);
