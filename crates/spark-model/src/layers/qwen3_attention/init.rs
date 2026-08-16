@@ -216,11 +216,13 @@ impl Qwen3AttentionLayer {
                 "rope_mrope_interleaved",
                 "rope_forward_mrope_interleaved",
             ),
-            rope_yarn_k: if config.rope_interleave {
-                super::super::try_kernel(gpu, "rope", "rope_forward_yarn_interleave")
-                    .or_else(|| super::super::try_kernel(gpu, "rope", "rope_forward_yarn"))
-            } else {
-                super::super::try_kernel(gpu, "rope", "rope_forward_yarn")
+            rope_yarn_k: {
+                let interleave = super::super::try_kernel(gpu, "rope", "rope_forward_yarn_interleave");
+                if config.rope_interleave && interleave.0 != 0 {
+                    interleave
+                } else {
+                    super::super::try_kernel(gpu, "rope", "rope_forward_yarn")
+                }
             },
             rope_proportional_k: super::super::try_kernel(gpu, "rope", "rope_forward_proportional"),
             reshape_cache_k: gpu.kernel(reshape_mod, reshape_fn)?,
