@@ -543,7 +543,7 @@ impl Qwen3AttentionLayer {
                 let gv: Vec<f32> = gb.chunks_exact(2).take(8)
                     .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
                     .collect();
-                let mean: f32 = gv.iter().map(|v| v * v).sum::<f32>().sqrt() / gv.len() as f32;
+                let _mean: f32 = gv.iter().map(|v| v * v).sum::<f32>().sqrt() / gv.len() as f32;
                 tracing::info!("MLA-DIAG gate_raw[:8]={:?}", gv);
             }
             let gate_k = crate::layers::try_kernel(
