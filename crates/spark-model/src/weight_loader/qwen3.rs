@@ -123,6 +123,7 @@ impl ModelWeightLoader for Qwen3WeightLoader {
                 Some(gate_nvfp4),
                 gpu,
                 config,
+                0.0,
             )?;
             if !native_fp8 && !skip_moe_transpose {
                 moe_layer.transpose_for_prefill(gpu, config)?;

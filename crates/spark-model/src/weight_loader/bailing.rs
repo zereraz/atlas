@@ -110,8 +110,13 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
                 // instead of HF's 176 on the same probe (2026-08-13), which
                 // poisons the entire downstream. 2.6 MB extra is nothing for
                 // guaranteed routing bit-parity with HF.
+                let swiglu_clamp = if i < config.expert_swiglu_limit_list.len() {
+                    config.expert_swiglu_limit_list[i]
+                } else {
+                    0.0
+                };
                 let moe_layer = MoeLayer::new(
-                    moe_weights, config.num_experts, None, gpu, config,
+                    moe_weights, config.num_experts, None, gpu, config, swiglu_clamp,
                 )?;
                 if variant == crate::weight_map::Nvfp4Variant::Mxfp4Dequanted {
                     // MXFP4 runtime requantization duplicates the on-disk

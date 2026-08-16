@@ -65,6 +65,7 @@ impl ModelConfig {
             conv_kernel: 0,
             moe_shared_expert_intermediate_size: 0,
             first_k_dense_replace: 0,
+            expert_swiglu_limit_list: Vec::new(),
             routed_scaling_factor: 1.0,
             kda_lower_bound: 0.0,
             ssm_per_channel_gates: false,

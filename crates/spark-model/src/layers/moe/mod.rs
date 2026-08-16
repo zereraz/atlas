@@ -244,6 +244,12 @@ pub struct MoeLayer {
     // path. Used to test whether the kernel choice is the dominant cause
     // of low DFlash drafter acceptance on FP4/FP8 targets.
     pub is_dflash_capture_layer: bool,
+    /// SwiGLU clamp limit for this layer (from `expert_swiglu_limit_list`).
+    /// 0.0 = no clamp. >0 = clamp `silu(gate)*up` to ±limit before down_proj.
+    /// Ling-3.0-flash layers 35–41 use 4.0.
+    pub swiglu_clamp: f32,
+    /// Element-wise BF16 clamp kernel (loaded once, used when swiglu_clamp > 0).
+    clamp_bf16_k: KernelHandle,
 }
 
 // ── Sub-files (split for ≤500 LoC) ────────────────────────────────────────

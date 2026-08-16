@@ -130,6 +130,7 @@ impl ModelWeightLoader for MinimaxM2WeightLoader {
                 Some(gate_nvfp4),
                 gpu,
                 config,
+                0.0,
             )?;
             // Wire up MoE prefill acceleration. `predequant_for_prefill` is
             // cheap (~50 MB total: gate only, no shared expert) and always

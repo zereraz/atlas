@@ -142,7 +142,7 @@ fn build_moe_ffn(
     }
     match load_moe_mistral(store, i, config.num_experts, gpu, config) {
         Ok(moe_weights) => {
-            match MoeLayer::new(moe_weights, config.num_experts, None, gpu, config) {
+            match MoeLayer::new(moe_weights, config.num_experts, None, gpu, config, 0.0) {
                 Ok(mut moe) => {
                     // Skip MoE transpose for Mistral on single GPU: saves
                     // ~1.5 GB per layer (54 GB total). Prefill uses the

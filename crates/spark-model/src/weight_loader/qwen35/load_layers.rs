@@ -163,6 +163,7 @@ pub(super) fn load_layers(
             Some(gate_nvfp4),
             gpu,
             config,
+                0.0,
         )?;
         // Phase 2.7 Tier C: flag DFlash capture layers so the MoE forward
         // can dispatch the Frankenstein kernel route (env-var-gated). The

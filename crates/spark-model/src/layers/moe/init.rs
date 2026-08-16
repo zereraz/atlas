@@ -11,6 +11,7 @@ impl MoeLayer {
         gate_nvfp4: Option<QuantizedWeight>,
         gpu: &dyn GpuBackend,
         config: &atlas_core::config::ModelConfig,
+        swiglu_clamp: f32,
     ) -> Result<Self> {
         // Sanity-check the routing config: top-k that exceeds the
         // expert count would index OOB in the topk kernel and produce
@@ -252,6 +253,8 @@ impl MoeLayer {
                 "moe_topk_sig",
                 "moe_topk_sigmoid_batched",
             ),
+            swiglu_clamp,
+            clamp_bf16_k: super::super::try_kernel(gpu, "moe_silu_mul", "clamp_bf16"),
         })
     }
 }

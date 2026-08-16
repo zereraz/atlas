@@ -165,6 +165,11 @@ pub struct ModelConfig {
     /// Qwen1.5-MoE, ...). 0 = all layers MoE.
     #[serde(default)]
     pub first_k_dense_replace: usize,
+    /// Per-layer SwiGLU clamp limit (Ling-3.0-flash `expert_swiglu_limit_list`).
+    /// 0 = no clamp. >0 = clamp `silu(gate)*up` to ±limit before down_proj.
+    /// Empty vec = no clamp on any layer.
+    #[serde(default)]
+    pub expert_swiglu_limit_list: Vec<f32>,
     /// Nemotron-H routed scaling factor for expert outputs.
     #[serde(default = "default_one_f64")]
     pub routed_scaling_factor: f64,

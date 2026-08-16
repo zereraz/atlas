@@ -198,6 +198,21 @@ impl MoeLayer {
                 total_expanded * inter,
                 stream,
             )?;
+            // Ling-3.0-flash `expert_swiglu_limit_list`: clamp the SwiGLU
+            // intermediate (silu(gate)*up) to ±swiglu_clamp before the down
+            // GEMM. Layers 35–41 use limit=4.0 to prevent extreme values
+            // from blowing up through down_proj. No-op when swiglu_clamp==0.
+            if self.swiglu_clamp > 0.0 && self.clamp_bf16_k.0 != 0 {
+                use spark_runtime::kernel_args::KernelLaunch;
+                let n_elems = total_expanded * inter;
+                KernelLaunch::new(ctx.gpu, self.clamp_bf16_k)
+                    .grid([(n_elems.div_ceil(256)) as u32, 1, 1])
+                    .block([256, 1, 1])
+                    .arg_ptr(expert_gate_out)
+                    .arg_f32(self.swiglu_clamp)
+                    .arg_u32(n_elems as u32)
+                    .launch(stream)?;
+            };
             if let Some(dp) = &self.down_ptrs_t {
                 ops::moe_w4a16_grouped_gemm_ptrtable_n128(
                     ctx.gpu,

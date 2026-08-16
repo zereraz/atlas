@@ -51,6 +51,7 @@ pub(super) fn build_moe_ffn(
         Some(gate_nvfp4),
         gpu,
         config,
+                0.0,
     )?;
     moe_layer.set_gelu_activation(gpu)?;
     // Set pre-expert norm: router sees raw input, experts see normed input.

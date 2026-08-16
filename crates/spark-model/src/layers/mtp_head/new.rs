@@ -174,6 +174,7 @@ impl MtpHead {
                         Some(gate_nvfp4),
                         gpu,
                         config,
+                0.0,
                     )?;
                     (Some(moe), None, None)
                 }

@@ -73,6 +73,7 @@ impl ModelWeightLoader for Qwen3VLWeightLoader {
                 Some(gate_nvfp4),
                 gpu,
                 config,
+                0.0,
             )?);
 
             // All layers are FullAttention with ungated Q projection.
