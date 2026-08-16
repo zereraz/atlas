@@ -312,10 +312,13 @@ impl Qwen3AttentionLayer {
         })?;
 
         // Step 4: K_rope + RoPE + writeback.
-        // Use expert_gate_out instead of ssm_ba: ssm_ba is shared with
-        // q_latent (Ling q_lora = h = 2560), which exceeds KDA's 64-wide
-        // ssm_ba_size and overflows into downstream buffers.
-        let k_rope_single = ctx.buffers.expert_gate_out();
+        // ⚠ Buffer aliasing fix: k_rope_single MUST NOT alias kv_latent.
+        // Previously both used expert_gate_out, causing the k_rope GEMV
+        // (64 elems) to overwrite the first 64 elements of kv_latent
+        // (512 elems). The cache assemble then copied the corrupted
+        // kv_latent into the K/V cache → garbage MLA decode output.
+        // ssm_qkvz is free during MLA decode (only used by SSM/KDA layers).
+        let k_rope_single = ctx.buffers.ssm_qkvz();
         if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-k_rope+RoPE+wb"); ctx.gpu.synchronize(stream)?; }
         prof!("k_rope+RoPE+wb", {
             ops::dense_gemv(
