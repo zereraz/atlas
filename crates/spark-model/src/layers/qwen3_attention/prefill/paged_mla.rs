@@ -347,6 +347,26 @@ impl Qwen3AttentionLayer {
         )?;
         sync!("prefill_attention");
 
+        // Ling MLA headwise sigmoid gate (matching cache_skip_mla.rs + HF reference)
+        if mla.g_proj.weight.0 != 0 {
+            let gate_raw = ctx.buffers.gate_logits();
+            ops::dense_gemm(
+                ctx.gpu, self.dense_gemm_k, normed, &mla.g_proj, gate_raw,
+                n, nq, h, stream,
+            )?;
+            let gate_k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
+            if gate_k.0 != 0 {
+                spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, gate_k)
+                    .grid([n, 1, 1])
+                    .block([128, 1, 1])
+                    .arg_ptr(attn_out)
+                    .arg_ptr(gate_raw)
+                    .arg_u32(n)
+                    .launch(stream)
+                    .map_err(|e| anyhow::anyhow!("paged_mla headwise-gate launch: {e}"))?;
+            }
+        }
+
         // O projection: [N, nq*v_dim] → [N, H]. Ling: attention output
         // buffer carries V-heads only (v_dim=128), so input K dim is
         // nq*v_dim=4096, not nq*hd=6144 (composite nope+rope head).
