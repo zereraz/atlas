@@ -97,7 +97,19 @@ impl ModelWeightLoader for BailingHybridWeightLoader {
                 let dw = load_dense_ffn(
                     store, &lp, gpu, variant, absmax_k, quantize_k, stream, config,
                 )?;
-                FfnComponent::Dense(DenseFfnLayer::new(dw, gpu)?)
+                let mut dense_layer = DenseFfnLayer::new(dw, gpu)?;
+                // Ling dense FFN weights are BF16 on disk. The NVFP4 runtime
+                // quantization introduces per-tile errors that compound through
+                // the residual stream. Install BF16 weights to use dense_gemm_bf16
+                // instead of w4a16_gemm, matching vLLM/HF exactly.
+                let h = config.hidden_size;
+                let inter = config.intermediate_size;
+                let gate_bf16 = dense(store, &format!("{lp}.mlp.gate_proj.weight"))?;
+                let up_bf16 = dense(store, &format!("{lp}.mlp.up_proj.weight"))?;
+                let down_bf16 = dense(store, &format!("{lp}.mlp.down_proj.weight"))?;
+                let _ = (h, inter); // suppress unused
+                dense_layer.set_bf16_weights(gate_bf16, up_bf16, down_bf16);
+                FfnComponent::Dense(dense_layer)
             } else {
                 let moe_weights = load_moe_bailing(
                     store, &lp, config.num_experts, gpu, config, variant, absmax_k,
