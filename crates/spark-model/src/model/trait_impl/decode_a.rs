@@ -124,7 +124,8 @@ impl TransformerModel {
             && !self
                 .suppress_graphs
                 .load(std::sync::atomic::Ordering::Relaxed)
-            && !hss_engaged;
+            && !hss_engaged
+            && !std::env::var("ATLAS_NO_GRAPHS").is_ok();
 
         let ctx = ForwardContext {
             buffers: &self.buffers,
