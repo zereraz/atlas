@@ -371,6 +371,14 @@ impl Qwen3AttentionLayer {
         mla_diag_norm(ctx.gpu, "kv_latent(normed)", kv_latent, kv_lora as usize);
         mla_diag_norm(ctx.gpu, "k_rope(post-rope)", k_rope_single, mla_rope as usize);
 
+        // DIAG: print RoPE position
+        if std::env::var_os("ATLAS_MLA_DIAG").is_some() && !ctx.graph_capture {
+            let mut pos_b = [0u8; 4];
+            ctx.gpu.copy_d2h(meta.positions, &mut pos_b)?;
+            let pos0 = i32::from_le_bytes([pos_b[0], pos_b[1], pos_b[2], pos_b[3]]);
+            tracing::info!("MLA-DIAG position={pos0}");
+        }
+
         // Step 6: Cache assemble + write
         let k_cache_entry = k_out;
         let v_cache_entry = v_out;
