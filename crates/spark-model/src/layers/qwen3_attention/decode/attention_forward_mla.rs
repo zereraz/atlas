@@ -545,6 +545,19 @@ impl Qwen3AttentionLayer {
                     .collect();
                 let _mean: f32 = gv.iter().map(|v| v * v).sum::<f32>().sqrt() / gv.len() as f32;
                 tracing::info!("MLA-DIAG gate_raw[:8]={:?}", gv);
+                // Also dump normed[:8] and g_proj row 0[:8]
+                let mut nb = vec![0u8; 16];
+                ctx.gpu.copy_d2h(normed, &mut nb)?;
+                let nv: Vec<f32> = nb.chunks_exact(2).take(8)
+                    .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                    .collect();
+                tracing::info!("MLA-DIAG normed[:8]={:?}", nv);
+                let mut wb = vec![0u8; 16];
+                ctx.gpu.copy_d2h(mla.g_proj.weight, &mut wb)?;
+                let wv: Vec<f32> = wb.chunks_exact(2).take(8)
+                    .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                    .collect();
+                tracing::info!("MLA-DIAG g_proj[0,:8]={:?}", wv);
             }
             let gate_k = crate::layers::try_kernel(
                 ctx.gpu,
