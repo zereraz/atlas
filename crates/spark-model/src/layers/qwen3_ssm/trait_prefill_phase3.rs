@@ -48,6 +48,19 @@ impl Qwen3SsmLayer {
             stream,
         )?;
 
+        // ATLAS_GDN_DUMP: post gated_rms_norm (o_g) [N, value_dim] bf16
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            if !dir.is_empty() {
+                let tl = super::trait_prefill_phase1::get_thread_layer_idx();
+                let li = if tl != usize::MAX { tl } else { 0 };
+                let mut buf = vec![0u8; num_tokens * value_dim * bf16];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(normed_out_buf, &mut buf)?;
+                std::fs::write(format!("{dir}/kda_o_g_L{li}.bin"), &buf).ok();
+            }
+        }
+
         // ── 10. Output projection GEMM: [N, 4096] × [4096, 2048] → [N, 2048] ──
         let out_proj_buf = ctx.buffers.moe_output();
         let use_dense_out = std::env::var("ATLAS_DENSE_QKVZ").ok().as_deref() == Some("1");
@@ -142,6 +155,19 @@ impl Qwen3SsmLayer {
             )
         }
         .map_err(|e| anyhow::anyhow!("ssm phase3: out_proj GEMM failed: {e}"))?;
+
+        // ATLAS_GDN_DUMP: post o_proj (a_out) [N, h] bf16
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            if !dir.is_empty() {
+                let tl = super::trait_prefill_phase1::get_thread_layer_idx();
+                let li = if tl != usize::MAX { tl } else { 0 };
+                let mut buf = vec![0u8; num_tokens * h * bf16];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(out_proj_buf, &mut buf)?;
+                std::fs::write(format!("{dir}/kda_a_out_L{li}.bin"), &buf).ok();
+            }
+        }
 
         if std::env::var_os("ATLAS_KDA_DIAG").is_some() && num_tokens > 1 {
             ctx.gpu.synchronize(stream)?;
