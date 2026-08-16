@@ -71,11 +71,7 @@ pub async fn completions(
     // training). Users who construct their own think tokens can include them
     // in the prompt — we only add the prefix if the prompt doesn't already
     // contain a </think> token.
-    let raw_prompt = if state.tokenizer.supports_thinking() && !req.prompt.contains("<think></think>") {
-        format!("<think></think>\n\n{}", req.prompt)
-    } else {
-        req.prompt.clone()
-    };
+    let raw_prompt = req.prompt.clone(); // DISABLED thinking-token prepend;
     let prompt_tokens = match state.tokenizer.encode(&raw_prompt) {
         Ok(t) => t,
         Err(e) => {
