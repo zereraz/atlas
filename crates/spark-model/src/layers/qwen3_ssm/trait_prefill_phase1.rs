@@ -136,6 +136,22 @@ impl Qwen3SsmLayer {
             stream,
         )?;
 
+        // ATLAS_GDN_DUMP: raw input to rms_norm (embed for L0) — diagnose 30-32
+        {
+            let dir = std::env::var("ATLAS_GDN_DUMP").unwrap_or_default();
+            let layers = std::env::var("ATLAS_GDN_DUMP_LAYERS").unwrap_or_default();
+            let li = ssm_layer_idx % 42;
+            if !dir.is_empty() && layers.split(',').any(|s| s.trim() == li.to_string()) {
+                let mut hbuf = vec![0u8; num_tokens * h * bf16];
+                ctx.gpu.synchronize(stream)?;
+                ctx.gpu.copy_d2h(hidden, &mut hbuf)?;
+                std::fs::write(format!("{dir}/rms_input_L{li}.bin"), &hbuf).ok();
+                let mut rbuf = vec![0u8; num_tokens * h * bf16];
+                ctx.gpu.copy_d2h(residual, &mut rbuf)?;
+                std::fs::write(format!("{dir}/rms_residual_L{li}.bin"), &rbuf).ok();
+            }
+        }
+
         // ── 2+3. QKVZ GEMM (+ deinterleave if needed) ──
         let deinterleaved = ctx.buffers.ssm_deinterleaved();
         let proj_dst = if self.sequential_qkvz {
