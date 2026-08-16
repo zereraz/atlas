@@ -275,8 +275,8 @@ impl TransformerModel {
             }
         };
 
-        // Diagnostic: dump hidden state for first 2 decode tokens after prefill
-        let diag = seq.seq_len < seq.tokens.len() + 2;
+        // Diagnostic: dump hidden state for ALL decode tokens
+        let diag = true;
         if diag {
             self.gpu.synchronize(stream)?;
             let (vals, norm) = self.readback_f32(hidden, 8)?;
