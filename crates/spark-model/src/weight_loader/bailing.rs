@@ -524,10 +524,15 @@ fn build_full_attention_bailing(
     gpu.copy_d2d(w_uv_ptr, w_uv_block_diag_ptr, n_kv * kv_lora * v_dim * bf16)?;
 
     // ── Output projection + gating ─────────────────────────────────────────
-    // DIAG: wo NVFP4 GEMV disabled — same w4a16_gemv family that produced
-    // garbage for wq_b/wkv_a. Force BF16 dense_gemv/dense_gemm for Wo.
-    // was: let wo_nvfp4 = quantize_to_nvfp4(&o_dense, ...)?;
-    let wo_nvfp4: Option<crate::weight_map::QuantizedWeight> = None;
+    let wo_nvfp4 = quantize_to_nvfp4(
+        &o_dense,
+        h,
+        n_heads * v_dim,
+        gpu,
+        absmax_k,
+        quantize_k,
+        stream,
+    )?;
 
     let attn = AttentionWeights {
         q_proj: DenseWeight {
