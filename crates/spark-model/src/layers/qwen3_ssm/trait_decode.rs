@@ -4,6 +4,8 @@
 
 use super::*;
 
+static SSM_DIAG_IDX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl Qwen3SsmLayer {
     pub(super) fn decode_inner(
         &self,
@@ -50,7 +52,7 @@ impl Qwen3SsmLayer {
                 .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
                 .collect();
             let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
-            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_rms.bin", self.attn_layer_idx)), &bytes).ok();
+            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_rms.bin", SSM_DIAG_IDX.fetch_add(1, std::sync::atomic::Ordering::Relaxed))), &bytes).ok();
         }
         if debug {
             ctx.gpu.synchronize(stream)?;
@@ -131,7 +133,7 @@ impl Qwen3SsmLayer {
                 .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
                 .collect();
             let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
-            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_addrms.bin", self.attn_layer_idx)), &bytes).ok();
+            std::fs::write(std::path::Path::new(&dir).join(format!("decode_L{}_post_addrms.bin", SSM_DIAG_IDX.fetch_add(1, std::sync::atomic::Ordering::Relaxed))), &bytes).ok();
         }
         if debug {
             ctx.gpu.synchronize(stream)?;
