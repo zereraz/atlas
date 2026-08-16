@@ -535,6 +535,17 @@ impl Qwen3AttentionLayer {
                     stream,
                 )
             })?;
+            // DIAG: print gate_raw values
+            if std::env::var_os("ATLAS_MLA_DIAG").is_some() && !ctx.graph_capture {
+                ctx.gpu.synchronize(stream)?;
+                let mut gb = vec![0u8; 64]; // 32 BF16 values
+                ctx.gpu.copy_d2h(gate_raw, &mut gb)?;
+                let gv: Vec<f32> = gb.chunks_exact(2).take(8)
+                    .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                    .collect();
+                let mean: f32 = gv.iter().map(|v| v * v).sum::<f32>().sqrt() / gv.len() as f32;
+                tracing::info!("MLA-DIAG gate_raw[:8]={:?}", gv);
+            }
             let gate_k = crate::layers::try_kernel(
                 ctx.gpu,
                 "ling_mla_attn",
