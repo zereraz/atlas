@@ -62,15 +62,12 @@ impl Qwen3AttentionLayer {
         // Temporary sync checkpoints for diagnosing which MLA kernel writes
         // out-of-bounds under Ling dims. Set ATLAS_MLA_SYNC=1 to activate.
         let sync_dbg = std::env::var("ATLAS_MLA_SYNC").ok().as_deref() == Some("1");
-        eprintln!("[MLA] sync_dbg={sync_dbg} layer={} n={n}", self.attn_layer_idx);
         macro_rules! sync {
             ($label:expr) => {
                 if sync_dbg {
                     if let Err(e) = ctx.gpu.synchronize(stream) {
-                        eprintln!("[MLA_SYNC] CORRUPTED at post-{}", $label);
                         return Err(e);
                     }
-                    eprintln!("[MLA_SYNC] post-{} OK", $label);
                 }
             };
         }
@@ -131,7 +128,6 @@ impl Qwen3AttentionLayer {
 
         // KV: latent → norm → expand
         let kv_latent = ctx.buffers.expert_gate_out();
-        eprintln!("[MLA] layer={} PRE-KV-exp\n", self.attn_layer_idx);
         ops::dense_gemm(
             ctx.gpu,
             self.dense_gemm_k,
@@ -326,7 +322,6 @@ impl Qwen3AttentionLayer {
         // dot-product contribution.
         let prefill_k = if hd == 192 {
             let k = crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_h192");
-            eprintln!("[MLA] hd=192 using kernel_handle={} (non-zero = h192 build)", k.0);
             k
         } else if hd > 256 && self.prefill_attn_512_k.0 != 0 {
             self.prefill_attn_512_k

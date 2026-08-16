@@ -109,8 +109,7 @@ impl Qwen3AttentionLayer {
         if q_lora == h {
             // no-op: q_latent already = normed input; we just use `normed` below
         } else {
-            if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wq_a"); ctx.gpu.synchronize(stream)?; }
-            prof!("wq_a", {
+                prof!("wq_a", {
             if let Some(ref wqa_nvfp4) = mla.wq_a_nvfp4 {
                 ops::w4a16_gemv(
                     ctx.gpu,
@@ -143,8 +142,7 @@ impl Qwen3AttentionLayer {
         }
         // Models with no Q-compression (Ling-3.0-flash) have no q_a_layernorm.
         if mla.q_a_norm.weight.0 != 0 {
-            if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-q_norm"); ctx.gpu.synchronize(stream)?; }
-            prof!("q_norm", {
+                prof!("q_norm", {
                 ops::rms_norm(
                     ctx.gpu,
                     self.rms_norm_k,
@@ -159,7 +157,6 @@ impl Qwen3AttentionLayer {
             })?;
         }
         let q_full = ctx.buffers.ssm_deinterleaved();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wq_b"); ctx.gpu.synchronize(stream)?; }
         prof!("wq_b", {
             if let Some(ref wqb_nvfp4) = mla.wq_b_nvfp4 {
                 ops::w4a16_gemv(
@@ -190,7 +187,6 @@ impl Qwen3AttentionLayer {
         // Step 2: Q_absorbed via batched GEMV
         let mla_cache_dim = kv_lora + mla_rope;
         let q_absorbed_buf = ctx.buffers.expert_up_out();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-q_absorb"); ctx.gpu.synchronize(stream)?; }
         prof!("q_absorb", {
             if self.mla_batched_gemv_k.0 != 0 {
                 ops::mla_batched_gemv(
@@ -233,7 +229,6 @@ impl Qwen3AttentionLayer {
 
         // Q_rope scatter
         let q_rope_direct = ctx.buffers.ssm_conv_out_f32();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-q_rope_scatter"); ctx.gpu.synchronize(stream)?; }
         prof!("q_rope_scatter", {
             if self.mla_q_rope_scatter_k.0 != 0 {
                 ops::mla_q_rope_scatter(
@@ -273,7 +268,6 @@ impl Qwen3AttentionLayer {
 
         // Step 3: KV latent → norm
         let kv_latent = ctx.buffers.expert_gate_out();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wkv_a+norm"); ctx.gpu.synchronize(stream)?; }
         prof!("wkv_a+norm", {
             if let Some(ref wkva_nvfp4) = mla.wkv_a_nvfp4 {
                 ops::w4a16_gemv(
@@ -319,7 +313,6 @@ impl Qwen3AttentionLayer {
         // kv_latent into the K/V cache → garbage MLA decode output.
         // ssm_qkvz is free during MLA decode (only used by SSM/KDA layers).
         let k_rope_single = ctx.buffers.ssm_qkvz();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-k_rope+RoPE+wb"); ctx.gpu.synchronize(stream)?; }
         prof!("k_rope+RoPE+wb", {
             ops::dense_gemv(
                 ctx.gpu,
@@ -382,7 +375,6 @@ impl Qwen3AttentionLayer {
         // Step 6: Cache assemble + write
         let k_cache_entry = k_out;
         let v_cache_entry = v_out;
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-cache_asm+write"); ctx.gpu.synchronize(stream)?; }
         prof!("cache_asm+write", {
             if self.mla_cache_assemble_k.0 != 0 {
                 ops::mla_cache_assemble(
@@ -457,7 +449,6 @@ impl Qwen3AttentionLayer {
             mla_diag_norm(ctx.gpu, "cache V@logical0", v0, mla_cache_dim as usize);
         }
 
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-paged_attn"); ctx.gpu.synchronize(stream)?; }
         prof!("paged_attn", {
             ops::paged_decode_attn_bf16(
                 ctx.gpu,
@@ -484,7 +475,6 @@ impl Qwen3AttentionLayer {
 
         // Step 9: V extraction (batched GEMV)
         let v_extracted = ctx.buffers.norm_output();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-v_extract"); ctx.gpu.synchronize(stream)?; }
         prof!("v_extract", {
             if self.mla_batched_gemv_k.0 != 0 {
                 ops::mla_batched_gemv(
@@ -571,7 +561,6 @@ impl Qwen3AttentionLayer {
 
         // Step 10: O projection
         let o_out = ctx.buffers.qkv_output();
-        if !ctx.graph_capture { eprintln!("[DEC-MLA] pre-wo"); ctx.gpu.synchronize(stream)?; }
         prof!("wo", {
             if let Some(ref wo_nvfp4) = mla.wo_nvfp4 {
                 ops::w4a16_gemv(
