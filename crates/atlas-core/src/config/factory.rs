@@ -78,6 +78,7 @@ impl ModelConfig {
             nested_config: false,
             mrope_section: [0, 0, 0],
             mrope_interleaved: false,
+            rope_interleave: false,
             kv_lora_rank: 0,
             kv_layer_dims: Vec::new(),
             q_lora_rank: 0,

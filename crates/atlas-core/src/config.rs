@@ -275,6 +275,11 @@ pub struct ModelConfig {
     #[serde(skip)]
     pub mrope_interleaved: bool,
 
+    /// GPT-J style interleaved RoPE: pairs (2i, 2i+1) instead of GPT-NeoX
+    /// style (i, i+half). Ling-3.0-flash sets `rope_interleave: true`.
+    #[serde(default)]
+    pub rope_interleave: bool,
+
     // ── Weight key prefix (set by parser for conditional generation models) ──
     #[serde(skip)]
     pub weight_prefix: String,
