@@ -117,6 +117,20 @@ pub(crate) fn parse_bailing_hybrid(raw: &serde_json::Value) -> Result<ModelConfi
     config.use_routing_bias = true; // checkpoint ships mlp.gate.expert_bias
     // norm_topk_prob + routed_scaling_factor already deserialize from config.
 
+    // Ling ships the shared-expert size as `moe_shared_expert_intermediate_size`
+    // (with `num_shared_experts=1`), NOT `shared_expert_intermediate_size`. The
+    // generic dispatch that copies one to the other only runs on the nemotron-h
+    // branch, so mirror it here: without this, `shared_expert_intermediate_size`
+    // stays 0 → `has_shared=false` → the shared expert (which HF adds directly:
+    // `y = y + self.shared_experts(x)`) is silently skipped → routed-only MoE
+    // output undershoots and drifts from vLLM across every MoE layer.
+    if config.shared_expert_intermediate_size == 0
+        && config.moe_shared_expert_intermediate_size > 0
+    {
+        config.shared_expert_intermediate_size =
+            config.moe_shared_expert_intermediate_size;
+    }
+
     // first_k_dense_replace=2: the first 2 layers are dense FFN (no MoE).
     // Qwen35 load loop uses `decoder_sparse_step`/`first_k_dense_replace`-style
     // flags via layer_types, so the dense layers are expressed that way; the
