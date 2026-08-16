@@ -32,7 +32,7 @@ pub(super) fn compute_yarn_inv_freq(
     let factor = if config.yarn_factor > 0.0 {
         config.yarn_factor
     } else {
-        128.0
+        1.0 // YaRN disabled (yarn_factor==0): plain RoPE, no scaling
     };
     let beta_fast = if config.yarn_beta_fast > 0.0 {
         config.yarn_beta_fast
