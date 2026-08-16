@@ -54,7 +54,7 @@ impl TransformerModel {
         self.embed(token, hidden, stream)?;
 
         // DIAG: dump hidden right after embed
-        if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP") && !dir.is_empty() {
+        if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP") && !dir.is_empty() && seq.seq_len <= 35 {
             self.gpu.synchronize(stream)?;
             let h = self.config.hidden_size;
             let mut vals = vec![0u8; h * 2];
@@ -63,7 +63,7 @@ impl TransformerModel {
                 .map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) })
                 .collect();
             let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
-            std::fs::write(std::path::Path::new(&dir).join("decode_embed.bin"), &bytes).ok();
+            std::fs::write(std::path::Path::new(&dir).join(format!("decode_embed_step{}.bin", seq.seq_len)), &bytes).ok();
         }
 
         // 2. Pre-allocate KV cache blocks + upload attention metadata
