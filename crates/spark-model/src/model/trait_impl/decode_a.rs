@@ -188,6 +188,27 @@ impl TransformerModel {
                 &ctx,
                 stream,
             )?;
+            // ATLAS_DECODE_DUMP: dump hidden state after each layer for first decode step
+            if let Ok(dir) = std::env::var("ATLAS_DECODE_DUMP")
+                && !dir.is_empty()
+                && seq.seq_len <= 35  // only first 2 decode steps
+                && !use_graphs
+            {
+                self.gpu.synchronize(stream)?;
+                let h = self.config.hidden_size;
+                let dt = if self.config.use_fp32_residual() { 4usize } else { 2usize };
+                let mut vals = vec![0u8; h * dt];
+                let _ = self.gpu.copy_d2h(hidden, &mut vals);
+                let allf: Vec<f32> = if dt == 4 {
+                    vals.chunks_exact(4).map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect()
+                } else {
+                    vals.chunks_exact(2).map(|c| { let b = u16::from_le_bytes([c[0],c[1]]); f32::from_bits((b as u32) << 16) }).collect()
+                };
+                let bytes: Vec<u8> = allf.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::create_dir_all(&dir).ok();
+                let fname = format!("decode_L{i}_step{}.bin", seq.seq_len);
+                std::fs::write(std::path::Path::new(&dir).join(&fname), &bytes).ok();
+            };
             // DFlash 5-layer hidden capture (no-op when proposer is not DFlash).
             // Single-token decode: row 0 of `hidden_states()` holds the post-layer
             // activation. Cheap d2d when the layer index matches; otherwise a
