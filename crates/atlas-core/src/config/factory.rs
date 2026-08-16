@@ -59,6 +59,8 @@ impl ModelConfig {
             mamba_head_dim: 0,
             ssm_state_size: 0,
             n_groups: 0,
+            n_group: 0,
+            topk_group: 0,
             expand: 0,
             n_routed_experts: 0,
             norm_eps: 0.0,

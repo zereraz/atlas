@@ -27,7 +27,9 @@ extern "C" __global__ void moe_topk_sigmoid(
     unsigned int num_experts,
     unsigned int top_k,
     unsigned int normalize,       // 1 = normalize weights to sum to 1
-    float scaling_factor          // routed_scaling_factor (applied to final weights)
+    float scaling_factor,         // routed_scaling_factor (applied to final weights)
+    unsigned int n_group,         // 0 = no group-limited; else num groups (e.g. 8)
+    unsigned int topk_group       // top groups to select (e.g. 4)
 ) {
     __shared__ float s_sigmoid[MAX_EXPERTS];     // pre-bias sigmoid (for weights)
     __shared__ float s_selection[MAX_EXPERTS];   // sigmoid + bias (for top-K selection)
@@ -35,6 +37,9 @@ extern "C" __global__ void moe_topk_sigmoid(
     __shared__ unsigned int s_top_idxs[MAX_TOP_K];
     __shared__ float s_warp_val[8];
     __shared__ unsigned int s_warp_idx[8];
+    __shared__ float s_group_scores[32];         // per-group top-2 sum
+    __shared__ unsigned int s_group_idx[32];     // selected group indices
+    __shared__ float s_group_top_vals[32];       // for group topk
 
     const unsigned int tid = threadIdx.x;
     const unsigned int warp_id = tid / 32;
@@ -55,6 +60,64 @@ extern "C" __global__ void moe_topk_sigmoid(
         s_selection[i] = -1e30f;
     }
     __syncthreads();
+
+    // Phase 1b: Group-limited topk (DeepSeek-V3 / Ling)
+    // If n_group > 0, divide experts into n_group groups, compute per-group
+    // top-2 score sum, select top topk_group groups, mask others to -inf.
+    if (n_group > 0 && topk_group > 0 && n_group <= 32) {
+        unsigned int group_size = actual_n / n_group;
+        if (group_size > 0) {
+            // Compute per-group top-2 sum of s_selection
+            for (unsigned int g = tid; g < n_group; g += BLOCK_SIZE) {
+                float max1 = -1e30f, max2 = -1e30f;
+                unsigned int base = g * group_size;
+                for (unsigned int i = base; i < base + group_size && i < actual_n; i++) {
+                    float v = s_selection[i];
+                    if (v > max1) { max2 = max1; max1 = v; }
+                    else if (v > max2) { max2 = v; }
+                }
+                s_group_scores[g] = max1 + max2;
+            }
+            __syncthreads();
+
+            // Select top topk_group groups
+            for (unsigned int t = 0; t < topk_group && t < n_group; t++) {
+                if (tid == 0) {
+                    float best_val = -1e30f;
+                    unsigned int best_g = 0;
+                    for (unsigned int g = 0; g < n_group; g++) {
+                        if (s_group_scores[g] > best_val) {
+                            best_val = s_group_scores[g];
+                            best_g = g;
+                        }
+                    }
+                    s_group_idx[t] = best_g;
+                    s_group_scores[best_g] = -1e30f; // invalidate
+                }
+                __syncthreads();
+            }
+
+            // Build group mask and apply to s_selection
+            if (tid == 0) {
+                // Initialize all groups as masked
+                for (unsigned int g = 0; g < n_group; g++)
+                    s_group_scores[g] = 0.0f; // 0 = masked
+                // Mark selected groups
+                for (unsigned int t = 0; t < topk_group && t < n_group; t++)
+                    s_group_scores[s_group_idx[t]] = 1.0f; // 1 = selected
+            }
+            __syncthreads();
+
+            // Mask non-selected groups to -inf
+            for (unsigned int i = tid; i < actual_n; i += BLOCK_SIZE) {
+                unsigned int g = i / group_size;
+                if (g < n_group && s_group_scores[g] == 0.0f) {
+                    s_selection[i] = -1e30f;
+                }
+            }
+            __syncthreads();
+        }
+    }
 
     // Phase 2: Parallel top-K from selection scores (sigmoid + bias)
     for (unsigned int t = 0; t < top_k && t < actual_n; t++) {
@@ -134,7 +197,9 @@ extern "C" __global__ void moe_topk_sigmoid_batched(
     unsigned int num_experts,
     unsigned int top_k,
     unsigned int normalize,
-    float scaling_factor
+    float scaling_factor,
+    unsigned int n_group,         // 0 = no group-limited; else num groups (e.g. 8)
+    unsigned int topk_group       // top groups to select (e.g. 4)
 ) {
     __shared__ float s_sigmoid[MAX_EXPERTS];
     __shared__ float s_selection[MAX_EXPERTS];
@@ -142,6 +207,8 @@ extern "C" __global__ void moe_topk_sigmoid_batched(
     __shared__ unsigned int s_top_idxs[MAX_TOP_K];
     __shared__ float s_warp_val[8];
     __shared__ unsigned int s_warp_idx[8];
+    __shared__ float s_group_scores[32];
+    __shared__ unsigned int s_group_idx[32];
 
     const unsigned int token = blockIdx.x;
     const unsigned int tid = threadIdx.x;
@@ -165,6 +232,53 @@ extern "C" __global__ void moe_topk_sigmoid_batched(
         s_selection[i] = -1e30f;
     }
     __syncthreads();
+
+    // Phase 1b: Group-limited topk (DeepSeek-V3 / Ling)
+    if (n_group > 0 && topk_group > 0 && n_group <= 32) {
+        unsigned int group_size = actual_n / n_group;
+        if (group_size > 0) {
+            for (unsigned int g = tid; g < n_group; g += BLOCK_SIZE) {
+                float max1 = -1e30f, max2 = -1e30f;
+                unsigned int base = g * group_size;
+                for (unsigned int i = base; i < base + group_size && i < actual_n; i++) {
+                    float v = s_selection[i];
+                    if (v > max1) { max2 = max1; max1 = v; }
+                    else if (v > max2) { max2 = v; }
+                }
+                s_group_scores[g] = max1 + max2;
+            }
+            __syncthreads();
+            for (unsigned int t = 0; t < topk_group && t < n_group; t++) {
+                if (tid == 0) {
+                    float best_val = -1e30f;
+                    unsigned int best_g = 0;
+                    for (unsigned int g = 0; g < n_group; g++) {
+                        if (s_group_scores[g] > best_val) {
+                            best_val = s_group_scores[g];
+                            best_g = g;
+                        }
+                    }
+                    s_group_idx[t] = best_g;
+                    s_group_scores[best_g] = -1e30f;
+                }
+                __syncthreads();
+            }
+            if (tid == 0) {
+                for (unsigned int g = 0; g < n_group; g++)
+                    s_group_scores[g] = 0.0f;
+                for (unsigned int t = 0; t < topk_group && t < n_group; t++)
+                    s_group_scores[s_group_idx[t]] = 1.0f;
+            }
+            __syncthreads();
+            for (unsigned int i = tid; i < actual_n; i += BLOCK_SIZE) {
+                unsigned int g = i / group_size;
+                if (g < n_group && s_group_scores[g] == 0.0f) {
+                    s_selection[i] = -1e30f;
+                }
+            }
+            __syncthreads();
+        }
+    }
 
     for (unsigned int t = 0; t < top_k && t < actual_n; t++) {
         float local_max = -1e30f;

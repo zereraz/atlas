@@ -190,6 +190,8 @@ impl MoeLayer {
                     // (Used to be 1.0 here → prefill invisible-routed-scaling bug.)
                     ctx.config.routed_scaling_factor as f32,
                     n,
+                    ctx.config.n_group as u32,
+                    ctx.config.topk_group as u32,
                     stream,
                 )?;
             } else {
@@ -210,6 +212,8 @@ impl MoeLayer {
                         top_k,
                         ctx.config.norm_topk_prob,
                         ctx.config.routed_scaling_factor as f32,
+                        ctx.config.n_group as u32,
+                        ctx.config.topk_group as u32,
                         stream,
                     )?;
                 }

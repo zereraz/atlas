@@ -150,6 +150,8 @@ impl MoeLayer {
                 ctx.config.norm_topk_prob,
                 ctx.config.routed_scaling_factor as f32,
                 n,
+                ctx.config.n_group as u32,
+                ctx.config.topk_group as u32,
                 stream,
             )?;
         } else {

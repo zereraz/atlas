@@ -73,6 +73,14 @@ pub struct ModelConfig {
     pub moe_intermediate_size: usize,
     #[serde(default)]
     pub shared_expert_intermediate_size: usize,
+    /// MoE group-limited topk (DeepSeek-V3 / Ling): experts are divided into
+    /// `n_group` groups of `num_experts / n_group`. The top `topk_group`
+    /// groups (by per-group top-2 score sum) are selected, and experts in
+    /// non-selected groups are masked before global top-K.
+    #[serde(default)]
+    pub n_group: usize,
+    #[serde(default)]
+    pub topk_group: usize,
     /// Renormalize routing probabilities so the K active experts sum
     /// to 1 after top-K selection. Qwen3.5+ sets true; older Qwen2 MoE
     /// variants set false.

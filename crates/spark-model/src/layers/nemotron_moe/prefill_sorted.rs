@@ -58,6 +58,8 @@ impl NemotronMoeLayer {
             .arg_u32(if ctx.config.norm_topk_prob { 1 } else { 0 })
             .arg_f32(p.scale)
             .arg_u32(p.n)
+            .arg_u32(ctx.config.n_group as u32)
+            .arg_u32(ctx.config.topk_group as u32)
             .launch(stream)?;
 
         // 5b. Sort by expert → sorted_token_ids, expert_offsets

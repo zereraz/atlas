@@ -76,7 +76,7 @@ pub fn moe_topk_softmax_batched(
 /// Batched sigmoid + correction-bias top-K MoE routing.
 ///
 /// Kernel: `moe_topk_sigmoid_batched(gate_logits, bias, expert_indices,
-///         expert_weights, num_experts, top_k, normalize, scaling_factor)`
+///         expert_weights, num_experts, top_k, normalize, scaling_factor, n_group, topk_group)`
 /// Grid: (num_tokens, 1, 1)  Block: (256, 1, 1)
 #[allow(clippy::too_many_arguments)]
 pub fn moe_topk_sigmoid_batched(
@@ -91,6 +91,8 @@ pub fn moe_topk_sigmoid_batched(
     normalize: bool,
     scaling_factor: f32,
     num_tokens: u32,
+    n_group: u32,
+    topk_group: u32,
     stream: u64,
 ) -> Result<()> {
     KernelLaunch::new(gpu, kernel)
@@ -104,6 +106,8 @@ pub fn moe_topk_sigmoid_batched(
         .arg_u32(top_k)
         .arg_u32(if normalize { 1 } else { 0 })
         .arg_f32(scaling_factor)
+        .arg_u32(n_group)
+        .arg_u32(topk_group)
         .launch(stream)
 }
 

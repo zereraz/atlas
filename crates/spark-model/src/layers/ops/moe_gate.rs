@@ -49,7 +49,7 @@ pub fn moe_topk_softmax(
 /// not their weights. Weights come from pre-bias sigmoid scores.
 ///
 /// Kernel: `moe_topk_sigmoid(gate_logits, bias, expert_indices, expert_weights,
-///          num_experts, top_k, normalize, scaling_factor)`
+///          num_experts, top_k, normalize, scaling_factor, n_group, topk_group)`
 /// Grid: (1, 1, 1)  Block: (256, 1, 1)
 #[allow(clippy::too_many_arguments)]
 pub fn moe_topk_sigmoid(
@@ -63,6 +63,8 @@ pub fn moe_topk_sigmoid(
     top_k: u32,
     normalize: bool,
     scaling_factor: f32,
+    n_group: u32,
+    topk_group: u32,
     stream: u64,
 ) -> Result<()> {
     KernelLaunch::new(gpu, kernel)
@@ -76,6 +78,8 @@ pub fn moe_topk_sigmoid(
         .arg_u32(top_k)
         .arg_u32(if normalize { 1 } else { 0 })
         .arg_f32(scaling_factor)
+        .arg_u32(n_group)
+        .arg_u32(topk_group)
         .launch(stream)
 }
 
