@@ -11,6 +11,16 @@ impl Qwen3AttentionLayer {
     /// Set MLA weights for 2-step latent decode. When set, decode uses
     /// latent→norm→expand instead of single-step GEMV.
     pub fn set_mla_weights(&mut self, mla: MlaWeights) {
+        // MLA attention scale = 1/sqrt(qk_nope + qk_rope). The absorbed
+        // decode computes a (kv_lora+rope)-dim dot product, but the
+        // *effective* interaction dimension is nope+rope (the absorbed
+        // 512-dim product equals the original 128-dim q_nope·k_nope).
+        // Without this override, effective_attn_scale falls back to
+        // 1/sqrt(config.head_dim)=1/sqrt(128), which is wrong for MLA
+        // and produces over-sharpened softmax → broken decode while
+        // prefill (which computes hd=nope+rope locally) stays correct.
+        let mla_scale = 1.0f32 / ((mla.nope + mla.rope) as f32).sqrt();
+        self.attn_scale_override = Some(mla_scale);
         self.mla = Some(mla);
     }
 
