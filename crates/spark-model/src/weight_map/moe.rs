@@ -16,6 +16,8 @@ pub struct MoeWeights {
     pub gate: DenseWeight,
     /// Shared expert (always active).
     pub shared_expert: ExpertWeight,
+    /// Optional BF16 copy of shared expert for high-precision prefill.
+    pub shared_expert_dense: Option<DenseExpertWeight>,
     /// Shared expert gate sigmoid weight: `[1]` BF16.
     pub shared_expert_gate: DenseWeight,
     /// Per-expert weights: 512 experts.

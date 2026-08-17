@@ -187,6 +187,10 @@ pub struct MoeLayer {
     shared_gate_fp8: Option<DevicePtr>,
     shared_up_fp8: Option<DevicePtr>,
     shared_down_fp8: Option<DevicePtr>,
+    /// BF16 shared expert weights for high-precision prefill.
+    shared_gate_dense: Option<DenseWeight>,
+    shared_up_dense: Option<DenseWeight>,
+    shared_down_dense: Option<DenseWeight>,
     fp8_gemm_k: KernelHandle,
     /// Secondary CUDA stream for overlapping shared expert with routed experts.
     prefill_stream: u64,

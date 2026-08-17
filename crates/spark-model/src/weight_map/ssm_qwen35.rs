@@ -300,6 +300,7 @@ pub(crate) fn load_moe_qwen35(
     Ok(MoeWeights {
         gate,
         shared_expert,
+        shared_expert_dense: None,
         shared_expert_gate,
         experts,
         router_pre_norm: None,
@@ -469,6 +470,7 @@ pub(crate) fn load_moe_no_shared(
     Ok(MoeWeights {
         gate,
         shared_expert,
+        shared_expert_dense: None,
         shared_expert_gate,
         experts,
         router_pre_norm: None,
@@ -549,19 +551,27 @@ pub(crate) fn load_moe_bailing(
     // Ling's shared expert is BF16 (`shared_experts.*.weight`, in the
     // modules_to_not_convert ignore list) — never quantized. Load as dense and
     // runtime-quantize regardless of `variant`.
+    // KEEP the BF16 copy for high-precision prefill (ATLAS_BF16_SHARED_EXPERT).
     let shared_expert = {
         let sp = format!("{p}.shared_experts");
-        let bf16 = |name: &str, n: usize, k: usize| -> Result<QuantizedWeight> {
+        let bf16_keep = std::env::var_os("ATLAS_BF16_SHARED_EXPERT").is_some();
+        let bf16 = |name: &str, n: usize, k: usize| -> Result<(QuantizedWeight, Option<DenseWeight>)> {
             let d = dense(store, &format!("{sp}.{name}.weight"))?;
             let q = quantize_to_nvfp4(&d, n, k, gpu, absmax_k, quantize_k, stream)?;
-            gpu.free(d.weight)?;
-            Ok(q)
+            if bf16_keep {
+                Ok((q, Some(d)))
+            } else {
+                gpu.free(d.weight)?;
+                Ok((q, None))
+            }
         };
-        ExpertWeight {
-            gate_proj: bf16("gate_proj", inter, h)?,
-            up_proj: bf16("up_proj", inter, h)?,
-            down_proj: bf16("down_proj", h, inter)?,
-        }
+        let (gate_proj, gate_dense) = bf16("gate_proj", inter, h)?;
+        let (up_proj, up_dense) = bf16("up_proj", inter, h)?;
+        let (down_proj, down_dense) = bf16("down_proj", h, inter)?;
+        (
+            ExpertWeight { gate_proj, up_proj, down_proj },
+            gate_dense.zip(up_dense).zip(down_dense).map(|((g, u), d)| DenseExpertWeight { gate_proj: g, up_proj: u, down_proj: d }),
+        )
     };
 
     let mut experts = Vec::with_capacity(num_experts);
@@ -586,7 +596,8 @@ pub(crate) fn load_moe_bailing(
 
     Ok(MoeWeights {
         gate,
-        shared_expert,
+        shared_expert: shared_expert.0,
+        shared_expert_dense: shared_expert.1,
         shared_expert_gate,
         experts,
         router_pre_norm: None,

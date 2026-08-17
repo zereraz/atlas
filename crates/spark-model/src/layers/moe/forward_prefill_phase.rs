@@ -65,6 +65,31 @@ impl MoeLayer {
                 h,
                 aux,
             )?;
+        } else if let (Some(sg), Some(su), Some(_sd)) = (&self.shared_gate_dense, &self.shared_up_dense, &self.shared_down_dense) {
+            // BF16 shared expert gate+up GEMM (ATLAS_BF16_SHARED_EXPERT)
+            // silu_mul + down GEMM handled in the shared section below
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm,
+                input,
+                sg,
+                shared_gate_out,
+                n,
+                shared_inter,
+                h,
+                aux,
+            )?;
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm,
+                input,
+                su,
+                shared_up_out,
+                n,
+                shared_inter,
+                h,
+                aux,
+            )?;
         } else if let (Some(sg), Some(su), Some(_sd)) =
             (&self.shared_gate_t, &self.shared_up_t, &self.shared_down_t)
         {
@@ -142,6 +167,19 @@ impl MoeLayer {
             ops::w4a16_gemm_n128(
                 ctx.gpu,
                 self.w4a16_gemm_t,
+                shared_gate_out,
+                sd,
+                shared_down_out,
+                n,
+                h,
+                shared_inter,
+                aux,
+            )?;
+        } else if let Some(sd) = &self.shared_down_dense {
+            // BF16 down GEMM (ATLAS_BF16_SHARED_EXPERT)
+            ops::dense_gemm(
+                ctx.gpu,
+                self.dense_gemm,
                 shared_gate_out,
                 sd,
                 shared_down_out,

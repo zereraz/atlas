@@ -99,6 +99,7 @@ pub(super) fn load_moe_inner(
     Ok(MoeWeights {
         gate,
         shared_expert,
+        shared_expert_dense: None,
         shared_expert_gate,
         experts,
         router_pre_norm: None,
@@ -166,6 +167,7 @@ pub(crate) fn load_moe_mistral(
     Ok(MoeWeights {
         gate,
         shared_expert,
+        shared_expert_dense: None,
         shared_expert_gate,
         experts,
         router_pre_norm: None,
