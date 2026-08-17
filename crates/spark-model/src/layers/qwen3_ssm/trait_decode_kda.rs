@@ -227,13 +227,13 @@ impl Qwen3SsmLayer {
                 .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
             tracing::info!("KDA-DIAG kda_out[:4]={:?}", o);
 
-            // Dump ALL intermediates to files for oracle comparison
+            // Dump ALL intermediates to files for oracle comparison (L0 only, first decode step)
             let layer_idx = {
                 use std::sync::atomic::{AtomicUsize, Ordering};
                 static KDA_DECODE_LAYER: AtomicUsize = AtomicUsize::new(0);
-                let idx = KDA_DECODE_LAYER.fetch_add(1, Ordering::SeqCst);
-                idx % 64  // wrap to avoid overflow
+                KDA_DECODE_LAYER.fetch_add(1, Ordering::SeqCst)
             };
+            if layer_idx == 0 {
             let dump_dir = "/tmp/kda_decode_dump";
             let _ = std::fs::create_dir_all(dump_dir);
             // h_state: [nv, vd, kd] FP32
@@ -269,6 +269,7 @@ impl Qwen3SsmLayer {
             ctx.gpu.copy_d2h(state.h_state, &mut hb2)?;
             std::fs::write(format!("{dump_dir}/h_state_post_L{layer_idx}.bin"), &hb2)?;
             tracing::info!("KDA-DIAG dumped all intermediates to {dump_dir}/ (L{layer_idx})");
+            }
         }
 
         // FP32 GDN path needs the dedicated FP32 norm kernel.
