@@ -228,7 +228,7 @@ impl Qwen3SsmLayer {
             tracing::info!("KDA-DIAG kda_out[:4]={:?}", o);
 
             // Dump ALL intermediates to files for oracle comparison
-            let layer_idx = self.attn_layer_idx;
+            let layer_idx = crate::layers::qwen3_ssm::get_thread_layer_idx();
             let dump_dir = "/tmp/kda_decode_dump";
             let _ = std::fs::create_dir_all(dump_dir);
             // h_state: [nv, vd, kd] FP32
