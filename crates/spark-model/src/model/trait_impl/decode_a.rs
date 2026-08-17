@@ -72,8 +72,28 @@ impl TransformerModel {
         // MLA models: zero buffers reused for Q_absorbed computation.
         // Without this, stale prefill data in expert_up_out / ssm_conv_out_f32 /
         // ssm_ba contaminates the absorbed attention → generic/wrong output.
-        if self.config.kv_lora_rank > 0 {
+        if self.config.kv_lora_rank > 0 && std::env::var_os("ATLAS_NO_ZERO_ALL").is_none() {
             self.buffers.zero_all(self.gpu.as_ref(), stream)?;
+        }
+
+        // DIAG: dump h_state AFTER zero_all to check if it corrupted h_state
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && seq.seq_len <= 35 {
+            for (li, _layer) in self.layers.iter().enumerate() {
+                if self.config.layer_type(li) == LayerType::LinearAttention {
+                    let ssm_state = (&*seq.layer_states[li]).as_any().downcast_ref::<SsmLayerState>();
+                    if let Some(s) = ssm_state {
+                        let h_bytes = self.config.ssm_h_state_bytes();
+                        let mut buf = vec![0u8; h_bytes];
+                        let _ = self.gpu.synchronize(stream);
+                        let _ = self.gpu.copy_d2h(s.h_state, &mut buf);
+                        let norm: f32 = buf.chunks_exact(4)
+                            .map(|c| { let v = f32::from_le_bytes([c[0],c[1],c[2],c[3]]); v * v })
+                            .sum::<f32>().sqrt();
+                        tracing::info!("POST-ZERO-ALL L{li} h_state: norm={norm:.6} slot={}", seq.slot_idx);
+                    }
+                    break;
+                }
+            }
         }
 
         // 1. Embedding lookup
