@@ -226,6 +226,44 @@ impl Qwen3SsmLayer {
             let o: Vec<f32> = ob.chunks_exact(4).take(4)
                 .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
             tracing::info!("KDA-DIAG kda_out[:4]={:?}", o);
+
+            // Dump ALL intermediates to files for oracle comparison
+            let layer_idx = self.attn_layer_idx;
+            let dump_dir = "/tmp/kda_decode_dump";
+            let _ = std::fs::create_dir_all(dump_dir);
+            // h_state: [nv, vd, kd] FP32
+            let hsz = nv * vd * kd * 4;
+            let mut hb = vec![0u8; hsz];
+            ctx.gpu.copy_d2h(state.h_state, &mut hb)?;
+            std::fs::write(format!("{dump_dir}/h_state_pre_L{layer_idx}.bin"), &hb)?;
+            // q_conv, k_conv, v_conv: [nk/nv, kd] each
+            let qksz = nk * kd * elem;
+            let vsz = nv * vd * elem;
+            let mut qb = vec![0u8; qksz];
+            ctx.gpu.copy_d2h(q_conv, &mut qb)?;
+            std::fs::write(format!("{dump_dir}/q_conv_L{layer_idx}.bin"), &qb)?;
+            let mut kb = vec![0u8; qksz];
+            ctx.gpu.copy_d2h(k_conv, &mut kb)?;
+            std::fs::write(format!("{dump_dir}/k_conv_L{layer_idx}.bin"), &kb)?;
+            let mut vb = vec![0u8; vsz];
+            ctx.gpu.copy_d2h(v_conv, &mut vb)?;
+            std::fs::write(format!("{dump_dir}/v_conv_L{layer_idx}.bin"), &vb)?;
+            // log_decay: [nv, kd] FP32, beta: [nv] FP32
+            let mut ldb = vec![0u8; nv * kd * 4];
+            ctx.gpu.copy_d2h(log_decay, &mut ldb)?;
+            std::fs::write(format!("{dump_dir}/log_decay_L{layer_idx}.bin"), &ldb)?;
+            let mut bb = vec![0u8; nv * 4];
+            ctx.gpu.copy_d2h(beta, &mut bb)?;
+            std::fs::write(format!("{dump_dir}/beta_L{layer_idx}.bin"), &bb)?;
+            // kda_out: [nv, vd] FP32
+            let mut ob2 = vec![0u8; nv * vd * 4];
+            ctx.gpu.copy_d2h(kda_out_f32, &mut ob2)?;
+            std::fs::write(format!("{dump_dir}/kda_out_L{layer_idx}.bin"), &ob2)?;
+            // h_state AFTER (re-read to see updated state)
+            let mut hb2 = vec![0u8; hsz];
+            ctx.gpu.copy_d2h(state.h_state, &mut hb2)?;
+            std::fs::write(format!("{dump_dir}/h_state_post_L{layer_idx}.bin"), &hb2)?;
+            tracing::info!("KDA-DIAG dumped all intermediates to {dump_dir}/ (L{layer_idx})");
         }
 
         // FP32 GDN path needs the dedicated FP32 norm kernel.
