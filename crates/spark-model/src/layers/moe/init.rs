@@ -26,6 +26,9 @@ impl MoeLayer {
         let up_ptrs = build_ptr_table(&weights.experts, |e| &e.up_proj, gpu)?;
         let down_ptrs = build_ptr_table(&weights.experts, |e| &e.down_proj, gpu)?;
 
+        // Extract BF16 shared expert weights before `weights` is moved.
+        let shared_dense = weights.shared_expert_dense.take();
+
         // Extract the optional correction-bias device pointer before the
         // struct literal below moves `weights`. `.map(|dw| dw.weight)` turns
         // an `Option<DenseWeight>` into an `Option<DevicePtr>` for the
@@ -195,9 +198,9 @@ impl MoeLayer {
             shared_gate_fp8: None,
             shared_up_fp8: None,
             shared_down_fp8: None,
-            shared_gate_dense: weights.shared_expert_dense.as_ref().map(|d| d.gate_proj.clone()),
-            shared_up_dense: weights.shared_expert_dense.as_ref().map(|d| d.up_proj.clone()),
-            shared_down_dense: weights.shared_expert_dense.as_ref().map(|d| d.down_proj.clone()),
+            shared_gate_dense: shared_dense.as_ref().map(|d| d.gate_proj.clone()),
+            shared_up_dense: shared_dense.as_ref().map(|d| d.up_proj.clone()),
+            shared_down_dense: shared_dense.as_ref().map(|d| d.down_proj.clone()),
             prefill_stream: gpu.create_stream()?,
             event_a: gpu.create_event()?,
             event_b: gpu.create_event()?,
