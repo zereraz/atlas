@@ -87,7 +87,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm_tc"); ctx.gpu.synchronize(stream)?;
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -100,7 +99,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         }
         if mla.q_a_norm.weight.0 != 0 {
             ops::rms_norm(
@@ -114,7 +112,6 @@ impl Qwen3AttentionLayer {
                 eps,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-rms_norm"); ctx.gpu.synchronize(stream)?;
         }
         // MLA-expanded q = nq*(nope+rope) = 6144 bf16 per token.
         // qkv_output for Ling = m*(nq+2*nkv)*hd(cfg=128) = m*(32+64)*128 =
@@ -132,7 +129,6 @@ impl Qwen3AttentionLayer {
                 q_lora,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm_tc"); ctx.gpu.synchronize(stream)?;
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -145,7 +141,6 @@ impl Qwen3AttentionLayer {
                 q_lora,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         }
 
         // KV latent + K_rope
@@ -162,7 +157,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm_tc"); ctx.gpu.synchronize(stream)?;
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -175,7 +169,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         }
         ops::rms_norm(
             ctx.gpu,
@@ -188,7 +181,6 @@ impl Qwen3AttentionLayer {
             eps,
             stream,
         )?;
-        eprintln!("[MLA-CS] post-rms_norm"); ctx.gpu.synchronize(stream)?;
         let k_rope_buf = ctx.buffers.ssm_ba();
         // DIAG: dense_gemm_tc is suspect for small N (=rope=64) GEMMs — its TC
         // tiling assumes N>=64 per warp-pair and may drop tiles. If
@@ -206,7 +198,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm_tc"); ctx.gpu.synchronize(stream)?;
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -219,7 +210,6 @@ impl Qwen3AttentionLayer {
                 h,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         }
 
         // Q rope extract → RoPE
@@ -237,7 +227,6 @@ impl Qwen3AttentionLayer {
             nq * hd,
             stream,
         )?;
-        eprintln!("[MLA-CS] post-mla_q_rope_extract_batched"); ctx.gpu.synchronize(stream)?;
         let rope_meta = ctx.attn_metadata.expect("MLA prefill requires metadata");
         ops::rope_yarn(
             ctx.gpu,
@@ -254,7 +243,6 @@ impl Qwen3AttentionLayer {
             ctx.config.rope_theta as f32,
             stream,
         )?;
-        eprintln!("[MLA-CS] post-rope_yarn"); ctx.gpu.synchronize(stream)?;
 
         let mla_cache_dim = kv_lora + mla_rope;
         // Cache assembly (needed for decode regardless of path).
@@ -318,7 +306,6 @@ impl Qwen3AttentionLayer {
             kv_lora,
             stream,
         )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         let k_contiguous = ctx.buffers.ssm_qkvz();
         let v_contiguous = k_contiguous.offset(num_tokens * kv_dim * bf16);
         ops::mla_kv_assemble_batched(
@@ -337,7 +324,6 @@ impl Qwen3AttentionLayer {
             nkv * (mla_nope + mla_v_dim),
             stream,
         )?;
-        eprintln!("[MLA-CS] post-mla_kv_assemble_batched"); ctx.gpu.synchronize(stream)?;
         // NOTE: the KV cache was ALREADY written above in absorbed latent format
         // (1 head x mla_cache_dim). k_contiguous/v_contiguous here are the
         // EXPANDED per-head forms used ONLY by the prefill FlashAttention below
@@ -355,7 +341,6 @@ impl Qwen3AttentionLayer {
             nq * hd,
             stream,
         )?;
-        eprintln!("[MLA-CS] post-mla_q_rope_writeback_batched"); ctx.gpu.synchronize(stream)?;
         let attn_out_fb = ctx.buffers.attn_output();
         // Ling's MLA prefill attention: qk_dim=192 != v_dim=128 — none of the
         // template-compiled inferspark kernels support that split. Use the
@@ -363,7 +348,6 @@ impl Qwen3AttentionLayer {
         // so downstream wo-GEMM (K-dim nq*v_dim=4096) reads the right stride.
         if hd == 192 && mla_v_dim == 128 {
             let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_prefill_attn");
-            eprintln!("[MLA-CS] Ling qkd192/vd128 attn kernel handle={} (0 => fallback)", k.0);
             if k.0 != 0 {
                 let smem = ((n as usize) * (hd as usize + mla_v_dim as usize) * 2) as u32;
                 spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, k)
@@ -424,7 +408,6 @@ impl Qwen3AttentionLayer {
         }
         let prefill_k = if hd == 192 {
             let k = crate::layers::try_kernel(ctx.gpu, "prefill_h192", "inferspark_prefill_64_h192");
-            eprintln!("[MLA-CS] hd=192 using prefill_64_h192 handle={} (0 => fallback)", k.0);
             if k.0 != 0 { k } else { self.prefill_attn_64_k }
         } else {
             self.prefill_attn_64_k
@@ -447,7 +430,6 @@ impl Qwen3AttentionLayer {
             stream,
         )
         .map_err(|e| anyhow::anyhow!("MLA flash_attn_64 fallback: {e}"))?;
-        eprintln!("[MLA-CS] post-prefill_attention_64"); ctx.gpu.synchronize(stream)?;
         // ── Ling MLA headwise sigmoid gate (fallback path) ──────────────
         // See comment above. Gate attn_out_fb [N, 32*128] with sigmoid of
         // gate_raw [N, 32] = dense_gemm(normed, g_proj).
@@ -556,7 +538,6 @@ impl Qwen3AttentionLayer {
                 wo_k,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-w4a16_gemm"); ctx.gpu.synchronize(stream)?;
         } else {
             ops::dense_gemm(
                 ctx.gpu,
@@ -569,7 +550,6 @@ impl Qwen3AttentionLayer {
                 wo_k,
                 stream,
             )?;
-        eprintln!("[MLA-CS] post-dense_gemm"); ctx.gpu.synchronize(stream)?;
         }
         Ok(o_out)
     }
