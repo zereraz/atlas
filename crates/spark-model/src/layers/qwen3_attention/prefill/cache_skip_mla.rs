@@ -366,6 +366,45 @@ impl Qwen3AttentionLayer {
                     .launch(stream)
                     .map_err(|e| anyhow::anyhow!("ling_mla_prefill_attn launch: {e}"))?;
                 ctx.gpu.synchronize(stream)?;
+                // DIAG: dump attn_out norm for last token
+                if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
+                    let v_per_tok = nq as usize * mla_v_dim as usize;
+                    let mut buf = vec![0u8; v_per_tok * 2];
+                    let last_off = (n as usize - 1) * v_per_tok * 2;
+                    let _ = ctx.gpu.copy_d2h(attn_out_fb.offset(last_off), &mut buf);
+                    let vals: Vec<f32> = (0..v_per_tok)
+                        .map(|i| { let b = u16::from_le_bytes([buf[i*2], buf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let norm: f32 = vals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    tracing::info!("PREFILL-MLA-DIAG L{} attn_out(last_tok) norm={:.4} n={}", self.attn_layer_idx, norm, n);
+                    // Also dump q_full norm for last token
+                    let q_per_tok = nq as usize * hd as usize;
+                    let mut qbuf = vec![0u8; q_per_tok * 2];
+                    let qlast = (n as usize - 1) * q_per_tok * 2;
+                    let _ = ctx.gpu.copy_d2h(qg_out.offset(qlast), &mut qbuf);
+                    let qvals: Vec<f32> = (0..q_per_tok)
+                        .map(|i| { let b = u16::from_le_bytes([qbuf[i*2], qbuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let qnorm: f32 = qvals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    tracing::info!("PREFILL-MLA-DIAG L{} q_full(last_tok) norm={:.4}", self.attn_layer_idx, qnorm);
+                    // Dump K/V expanded for last token
+                    let kv_per_tok = nkv as usize * (mla_nope as usize + mla_v_dim as usize);
+                    let mut kbuf = vec![0u8; kv_per_tok * 2];
+                    let klast = (n as usize - 1) * kv_per_tok * 2;
+                    let _ = ctx.gpu.copy_d2h(k_contiguous.offset(klast), &mut kbuf);
+                    let kvals: Vec<f32> = (0..kv_per_tok)
+                        .map(|i| { let b = u16::from_le_bytes([kbuf[i*2], kbuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let knorm: f32 = kvals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    tracing::info!("PREFILL-MLA-DIAG L{} k_expanded(last_tok) norm={:.4}", self.attn_layer_idx, knorm);
+                    let mut vbuf = vec![0u8; kv_per_tok * 2];
+                    let _ = ctx.gpu.copy_d2h(v_contiguous.offset(klast), &mut vbuf);
+                    let vvals: Vec<f32> = (0..kv_per_tok)
+                        .map(|i| { let b = u16::from_le_bytes([vbuf[i*2], vbuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let vnorm: f32 = vvals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    tracing::info!("PREFILL-MLA-DIAG L{} v_expanded(last_tok) norm={:.4}", self.attn_layer_idx, vnorm);
+                }
                 // ── Ling MLA headwise sigmoid gate ─────────────────────────
                 // vLLM bailing_moe_v3: attn_out.view(N, n_heads, v_dim) *
                 //   sigmoid(g_proj(normed)).unsqueeze(-1), then o_proj.
