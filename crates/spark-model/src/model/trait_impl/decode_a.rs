@@ -43,6 +43,34 @@ impl TransformerModel {
 
         // ── Phase 1: Operations OUTSIDE graph (vary per token) ──
 
+        // DIAG: dump h_state norm at start of decode (before zero_all)
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && seq.seq_len <= 35 {
+            // Find first SSM layer and dump its h_state
+            let mut ssm_idx = 0usize;
+            for (li, layer) in self.layers.iter().enumerate() {
+                if self.config.layer_type(li) == LayerType::LinearAttention {
+                    let ssm_state = (&*seq.layer_states[li]).as_any().downcast_ref::<SsmLayerState>();
+                    if let Some(s) = ssm_state {
+                        let h_bytes = self.config.ssm_h_state_bytes();
+                        let mut buf = vec![0u8; h_bytes];
+                        let _ = self.gpu.synchronize(stream);
+                        let _ = self.gpu.copy_d2h(s.h_state, &mut buf);
+                        let vals: Vec<f32> = buf.chunks_exact(4).take(4)
+                            .map(|c| f32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+                        let norm: f32 = buf.chunks_exact(4)
+                            .map(|c| { let v = f32::from_le_bytes([c[0],c[1],c[2],c[3]]); v * v })
+                            .sum::<f32>().sqrt();
+                        tracing::info!("DECODER-START L{li} h_state: norm={norm:.6} first4={vals:?} slot={}", seq.slot_idx);
+                        // Dump to file
+                        let _ = std::fs::create_dir_all("/tmp/kda_decode_dump");
+                        std::fs::write("/tmp/kda_decode_dump/h_state_decode_start_L0.bin", &buf).ok();
+                    }
+                    ssm_idx += 1;
+                    break; // Only first SSM layer
+                }
+            }
+        }
+
         // MLA models: zero buffers reused for Q_absorbed computation.
         // Without this, stale prefill data in expert_up_out / ssm_conv_out_f32 /
         // ssm_ba contaminates the absorbed attention → generic/wrong output.
