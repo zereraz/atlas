@@ -437,9 +437,10 @@ impl Qwen3AttentionLayer {
                 // DIAG: dump gate_raw for last token
                 if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
                     let n_heads = nq as usize;
+                    let gr = ctx.buffers.gate_logits();
                     let mut gb = vec![0u8; n_heads * 2];
                     let glast = (n as usize - 1) * n_heads * 2;
-                    let _ = ctx.gpu.copy_d2h(gate_raw.offset(glast), &mut gb);
+                    let _ = ctx.gpu.copy_d2h(gr.offset(glast), &mut gb);
                     let gv: Vec<f32> = gb.chunks_exact(2).take(8)
                         .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
                         .collect();
