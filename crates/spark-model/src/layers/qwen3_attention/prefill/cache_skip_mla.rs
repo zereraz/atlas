@@ -387,7 +387,7 @@ impl Qwen3AttentionLayer {
                         .collect();
                     let qnorm: f32 = qvals.iter().map(|v| v * v).sum::<f32>().sqrt();
                     tracing::info!("PREFILL-MLA-DIAG L{} q_full(last_tok) norm={:.4}", self.attn_layer_idx, qnorm);
-                    // Dump K/V expanded for last token
+                    // Dump K expanded for last token (correct stride: nkv * (nope + v_dim))
                     let kv_per_tok = nkv as usize * (mla_nope as usize + mla_v_dim as usize);
                     let mut kbuf = vec![0u8; kv_per_tok * 2];
                     let klast = (n as usize - 1) * kv_per_tok * 2;
@@ -397,9 +397,12 @@ impl Qwen3AttentionLayer {
                         .collect();
                     let knorm: f32 = kvals.iter().map(|v| v * v).sum::<f32>().sqrt();
                     tracing::info!("PREFILL-MLA-DIAG L{} k_expanded(last_tok) norm={:.4}", self.attn_layer_idx, knorm);
-                    let mut vbuf = vec![0u8; kv_per_tok * 2];
-                    let _ = ctx.gpu.copy_d2h(v_contiguous.offset(klast), &mut vbuf);
-                    let vvals: Vec<f32> = (0..kv_per_tok)
+                    // Dump V expanded for last token (correct stride: nkv * mla_v_dim)
+                    let v_stride_tok = nkv as usize * mla_v_dim as usize;
+                    let mut vbuf = vec![0u8; v_stride_tok * 2];
+                    let vlast = (n as usize - 1) * v_stride_tok * 2;
+                    let _ = ctx.gpu.copy_d2h(v_contiguous.offset(vlast), &mut vbuf);
+                    let vvals: Vec<f32> = (0..v_stride_tok)
                         .map(|i| { let b = u16::from_le_bytes([vbuf[i*2], vbuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
                         .collect();
                     let vnorm: f32 = vvals.iter().map(|v| v * v).sum::<f32>().sqrt();
@@ -430,6 +433,18 @@ impl Qwen3AttentionLayer {
                     } else {
                         tracing::warn!("MLA headwise-gate kernel missing; gate skipped (will diverge from vLLM)");
                     }
+                }
+                // DIAG: dump gate_raw for last token
+                if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
+                    let n_heads = nq as usize;
+                    let mut gb = vec![0u8; n_heads * 2];
+                    let glast = (n as usize - 1) * n_heads * 2;
+                    let _ = ctx.gpu.copy_d2h(gate_raw.offset(glast), &mut gb);
+                    let gv: Vec<f32> = gb.chunks_exact(2).take(8)
+                        .map(|c| f32::from_bits((u16::from_le_bytes([c[0], c[1]]) as u32) << 16))
+                        .collect();
+                    let sigv: Vec<f32> = gv.iter().map(|&v| 1.0 / (1.0 + (-v).exp())).collect();
+                    tracing::info!("PREFILL-MLA-DIAG L{} gate_raw[:8]={:?} sigmoid[:8]={:?}", self.attn_layer_idx, gv, sigv);
                 }
                 let o_out = ctx.buffers.qkv_output();
                 let wo_k = nq * mla_v_dim;
