@@ -419,6 +419,10 @@ impl Qwen3AttentionLayer {
                         ctx.gpu, self.dense_gemm_k, normed, &mla.g_proj, gate_raw,
                         n, n_heads, h, stream,
                     )?;
+                    let skip_gate = std::env::var_os("ATLAS_NO_MLA_GATE").is_some();
+                    if skip_gate {
+                        tracing::warn!("ATLAS_NO_MLA_GATE: skipping prefill MLA headwise gate");
+                    } else {
                     let k = crate::layers::try_kernel(ctx.gpu, "ling_mla_attn", "ling_mla_headwise_gate");
                     if k.0 != 0 {
                         spark_runtime::kernel_args::KernelLaunch::new(ctx.gpu, k)
@@ -432,6 +436,7 @@ impl Qwen3AttentionLayer {
                         ctx.gpu.synchronize(stream)?;
                     } else {
                         tracing::warn!("MLA headwise-gate kernel missing; gate skipped (will diverge from vLLM)");
+                    }
                     }
                 }
                 // DIAG: dump gate_raw for last token
