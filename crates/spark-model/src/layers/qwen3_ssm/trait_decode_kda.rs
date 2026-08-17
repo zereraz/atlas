@@ -51,6 +51,20 @@ impl Qwen3SsmLayer {
             h,
             stream,
         )?;
+
+        // DIAG: check h_state after QKVZ GEMV
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && trace {
+            let h_bytes = nv * vd * kd * 4;
+            let mut hb = vec![0u8; 64];
+            let _ = ctx.gpu.synchronize(stream);
+            let _ = ctx.gpu.copy_d2h(state.h_state, &mut hb);
+            let norm: f32 = {
+                let mut full = vec![0u8; h_bytes];
+                let _ = ctx.gpu.copy_d2h(state.h_state, &mut full);
+                full.chunks_exact(4).map(|c| { let v = f32::from_le_bytes([c[0],c[1],c[2],c[3]]); v*v }).sum::<f32>().sqrt()
+            };
+            tracing::info!("HSTATE-CHECK after QKVZ GEMV: norm={norm:.6}");
+        }
         if trace {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda qkvz_gemv");
@@ -160,6 +174,16 @@ impl Qwen3SsmLayer {
             self.kda_lower_bound_f,
             stream,
         )?;
+
+        // DIAG: check h_state after kda_gates
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && trace {
+            let _ = ctx.gpu.synchronize(stream);
+            let mut full = vec![0u8; nv * vd * kd * 4];
+            let _ = ctx.gpu.copy_d2h(state.h_state, &mut full);
+            let norm: f32 = full.chunks_exact(4).map(|c| { let v = f32::from_le_bytes([c[0],c[1],c[2],c[3]]); v*v }).sum::<f32>().sqrt();
+            tracing::info!("HSTATE-CHECK after kda_gates: norm={norm:.6}");
+        }
+
         if trace {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda_gates");
@@ -202,6 +226,16 @@ impl Qwen3SsmLayer {
             1e-6,
             stream,
         )?;
+
+        // DIAG: check h_state after conv1d
+        if std::env::var_os("ATLAS_KDA_DIAG").is_some() && trace {
+            let _ = ctx.gpu.synchronize(stream);
+            let mut full = vec![0u8; nv * vd * kd * 4];
+            let _ = ctx.gpu.copy_d2h(state.h_state, &mut full);
+            let norm: f32 = full.chunks_exact(4).map(|c| { let v = f32::from_le_bytes([c[0],c[1],c[2],c[3]]); v*v }).sum::<f32>().sqrt();
+            tracing::info!("HSTATE-CHECK after conv1d: norm={norm:.6}");
+        }
+
         if trace {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda conv1d_l2norm");
