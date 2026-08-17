@@ -55,6 +55,30 @@ impl Qwen3SsmLayer {
             ctx.gpu.synchronize(stream).inspect_err(|_e| {
                 tracing::error!("CRASH at kda qkvz_gemv");
             })?;
+            // Dump normed input and QKVZ output for oracle comparison
+            let layer_idx = {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static QKVZ_DUMP_CNT: AtomicUsize = AtomicUsize::new(0);
+                QKVZ_DUMP_CNT.fetch_add(1, Ordering::SeqCst)
+            };
+            if layer_idx == 0 {
+                let dd = "/tmp/kda_decode_dump";
+                let _ = std::fs::create_dir_all(dd);
+                // normed: [hidden_size] BF16
+                let mut nb = vec![0u8; h as usize * 2];
+                ctx.gpu.copy_d2h(normed, &mut nb)?;
+                std::fs::write(format!("{dd}/normed_input_L0.bin"), &nb)?;
+                // deinterleaved (QKVZ output): [qkvz_size] BF16
+                let mut qb = vec![0u8; qkvz_size as usize * 2];
+                ctx.gpu.copy_d2h(deinterleaved, &mut qb)?;
+                std::fs::write(format!("{dd}/qkvz_output_L0.bin"), &qb)?;
+                // conv_state: [conv_dim, d_conv] FP32
+                let csz = conv_dim as usize * d_conv as usize * 4;
+                let mut csb = vec![0u8; csz];
+                ctx.gpu.copy_d2h(state.conv_state, &mut csb)?;
+                std::fs::write(format!("{dd}/conv_state_L0.bin"), &csb)?;
+                tracing::info!("KDA-DIAG dumped normed+qkvz+conv_state to {dd}/");
+            }
         }
 
         // ── 2. Split QKV layout and Z pointer (same as GDN) ────────────────
