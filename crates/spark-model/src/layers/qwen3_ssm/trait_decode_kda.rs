@@ -228,7 +228,12 @@ impl Qwen3SsmLayer {
             tracing::info!("KDA-DIAG kda_out[:4]={:?}", o);
 
             // Dump ALL intermediates to files for oracle comparison
-            let layer_idx = super::trait_prefill_phase1::get_thread_layer_idx();
+            let layer_idx = {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static KDA_DECODE_LAYER: AtomicUsize = AtomicUsize::new(0);
+                let idx = KDA_DECODE_LAYER.fetch_add(1, Ordering::SeqCst);
+                idx % 64  // wrap to avoid overflow
+            };
             let dump_dir = "/tmp/kda_decode_dump";
             let _ = std::fs::create_dir_all(dump_dir);
             // h_state: [nv, vd, kd] FP32
