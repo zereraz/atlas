@@ -6,7 +6,7 @@ use super::*;
 
 impl MoeLayer {
     pub fn new(
-        weights: MoeWeights,
+        mut weights: MoeWeights,
         num_experts: usize,
         gate_nvfp4: Option<QuantizedWeight>,
         gpu: &dyn GpuBackend,
