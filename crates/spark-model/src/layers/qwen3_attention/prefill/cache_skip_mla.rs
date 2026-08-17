@@ -442,6 +442,27 @@ impl Qwen3AttentionLayer {
                         ctx.gpu, self.dense_gemm_k, attn_out_fb, &mla.wo, o_out, n, h, wo_k, stream,
                     )?;
                 }
+                // DIAG: dump o_out (Wo output) norm for last token
+                if std::env::var_os("ATLAS_MLA_DIAG").is_some() {
+                    ctx.gpu.synchronize(stream)?;
+                    let mut obuf = vec![0u8; h as usize * 2];
+                    let last_off = (n as usize - 1) * h as usize * 2;
+                    let _ = ctx.gpu.copy_d2h(o_out.offset(last_off), &mut obuf);
+                    let ovals: Vec<f32> = (0..h as usize)
+                        .map(|i| { let b = u16::from_le_bytes([obuf[i*2], obuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let onorm: f32 = ovals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    // Also dump gated attn_out norm
+                    let v_per_tok = nq as usize * mla_v_dim as usize;
+                    let mut gbuf = vec![0u8; v_per_tok * 2];
+                    let glast = (n as usize - 1) * v_per_tok * 2;
+                    let _ = ctx.gpu.copy_d2h(attn_out_fb.offset(glast), &mut gbuf);
+                    let gvals: Vec<f32> = (0..v_per_tok)
+                        .map(|i| { let b = u16::from_le_bytes([gbuf[i*2], gbuf[i*2+1]]); f32::from_bits((b as u32) << 16) })
+                        .collect();
+                    let gnorm: f32 = gvals.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    tracing::info!("PREFILL-MLA-DIAG L{} o_out(Wo) norm={:.4} gated_attn norm={:.4}", self.attn_layer_idx, onorm, gnorm);
+                }
                 return Ok(o_out);
             }
         }
