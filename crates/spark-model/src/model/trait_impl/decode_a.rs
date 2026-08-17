@@ -46,8 +46,7 @@ impl TransformerModel {
         // DIAG: dump h_state norm at start of decode (before zero_all)
         if std::env::var_os("ATLAS_KDA_DIAG").is_some() && seq.seq_len <= 35 {
             // Find first SSM layer and dump its h_state
-            let mut ssm_idx = 0usize;
-            for (li, layer) in self.layers.iter().enumerate() {
+            for (li, _layer) in self.layers.iter().enumerate() {
                 if self.config.layer_type(li) == LayerType::LinearAttention {
                     let ssm_state = (&*seq.layer_states[li]).as_any().downcast_ref::<SsmLayerState>();
                     if let Some(s) = ssm_state {
@@ -65,7 +64,6 @@ impl TransformerModel {
                         let _ = std::fs::create_dir_all("/tmp/kda_decode_dump");
                         std::fs::write("/tmp/kda_decode_dump/h_state_decode_start_L0.bin", &buf).ok();
                     }
-                    ssm_idx += 1;
                     break; // Only first SSM layer
                 }
             }
