@@ -164,6 +164,7 @@ impl MtpHead {
                             down_proj: shared_down,
                         },
                         shared_expert_gate: weights.shared_expert_gate,
+                        shared_expert_dense: None,
                         experts,
                         router_pre_norm: None,
                         correction_bias: None,

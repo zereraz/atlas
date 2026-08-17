@@ -8,6 +8,7 @@
 
 use anyhow::Result;
 use spark_runtime::gpu::{DevicePtr, GpuBackend, KernelHandle};
+use crate::weight_map::{DenseWeight, DenseExpertWeight};
 
 use crate::layer::ForwardContext;
 use crate::layers::ops;
