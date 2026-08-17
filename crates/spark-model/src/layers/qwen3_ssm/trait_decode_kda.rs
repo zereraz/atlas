@@ -73,7 +73,9 @@ impl Qwen3SsmLayer {
                 ctx.gpu.copy_d2h(deinterleaved, &mut qb)?;
                 std::fs::write(format!("{dd}/qkvz_output_L0.bin"), &qb)?;
                 // conv_state: [conv_dim, d_conv] FP32
-                let csz = conv_dim as usize * d_conv as usize * 4;
+                let cd = (nk * kd * 2 + nv * vd) as usize;
+                let dc = ctx.config.linear_conv_kernel_dim as usize;
+                let csz = cd * dc * 4;
                 let mut csb = vec![0u8; csz];
                 ctx.gpu.copy_d2h(state.conv_state, &mut csb)?;
                 std::fs::write(format!("{dd}/conv_state_L0.bin"), &csb)?;
